@@ -1,0 +1,11 @@
+name = "denno-acct-api"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+# 本番では Pages のドメインに /api/* ルートとして割り当てる想定。
+# routes = [{ pattern = "acct.example.jp/api/*", zone_name = "example.jp" }]
+
+# Secret は wrangler secret put で設定する（このファイルには書かない）:
+#   wrangler secret put API_TOKEN
+# 変数:
+#   GAS_ENDPOINT = GAS Web App の URL（vars に置くか Secret にする）

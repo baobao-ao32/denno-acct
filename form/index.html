@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>電脳サークル 会計報告フォーム</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>電脳サークル 会計報告</h1>
+  <nav class="tabs" role="tablist">
+    <button id="tab-expense" class="tab active" role="tab">支出報告</button>
+    <button id="tab-income" class="tab" role="tab">収入報告</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ============ 支出報告 ============ -->
+  <section id="panel-expense">
+    <div class="field">
+      <span class="label">領収書の有無</span>
+      <label><input type="radio" name="receipt-mode" value="with" checked> 領収書あり</label>
+      <label><input type="radio" name="receipt-mode" value="without"> 領収書なし（証明できない支出）</label>
+    </div>
+
+    <!-- 領収書あり -->
+    <div id="expense-with">
+      <div class="field">
+        <label class="label" for="receipt-files">領収書ファイル（画像 / PDF、最大5件まで）</label>
+        <input type="file" id="receipt-files" multiple
+               accept=".jpg,.jpeg,.png,.webp,.pdf,.heic,.heif,image/jpeg,image/png,image/webp,application/pdf,image/heic,image/heif">
+        <p class="hint">HEIC形式は自動でJPEGに変換されます。同じ領収書を分けて提出した場合、ファイルのハッシュで照合し、複製せずに用途だけを追加します。</p>
+      </div>
+      <div id="receipt-list"></div>
+    </div>
+
+    <!-- 領収書なし -->
+    <div id="expense-without" hidden>
+      <div class="receipt-card" id="no-receipt-card"></div>
+    </div>
+
+    <div class="actions">
+      <button id="submit-expense" class="primary">支出を報告する</button>
+    </div>
+  </section>
+
+  <!-- ============ 収入報告 ============ -->
+  <section id="panel-income" hidden>
+    <p class="hint">収入報告は1回の提出につき1項目のみです。年度は報告日（送信日）で判定されます。</p>
+    <div class="field">
+      <label class="label" for="income-subject">収入の種類</label>
+      <select id="income-subject"></select>
+    </div>
+    <div class="field">
+      <label class="label" for="income-amount">金額（円）</label>
+      <input type="number" id="income-amount" min="1" step="1" inputmode="numeric">
+    </div>
+    <div class="field" id="income-detail-field" hidden>
+      <label class="label" for="income-detail">詳細（具体的に何の収入か）</label>
+      <input type="text" id="income-detail" placeholder="例: 学園祭での頒布物の売上">
+    </div>
+    <div class="actions">
+      <button id="submit-income" class="primary">収入を報告する</button>
+    </div>
+  </section>
+
+  <div id="message" role="status"></div>
+  <details id="payload-preview" hidden>
+    <summary>送信ペイロード（プレビュー用）</summary>
+    <pre id="payload-json"></pre>
+  </details>
+</main>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

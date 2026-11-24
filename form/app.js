@@ -1,0 +1,398 @@
+import {
+  CATEGORIES,
+  PAYMENT_METHODS,
+  INCOME_SUBJECTS,
+  EXPENSE_SUBJECTS,
+  LIMITS,
+} from "./masters.js";
+
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+
+// ---------- 共通ユーティリティ ----------
+
+async function sha256Hex(blob) {
+  const buf = await blob.arrayBuffer();
+  const digest = await crypto.subtle.digest("SHA-256", buf);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+function isHeic(file) {
+  return /image\/hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test(file.name);
+}
+
+let heicLibPromise = null;
+function loadHeicLib() {
+  if (!heicLibPromise) {
+    heicLibPromise = new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js";
+      s.onload = () => resolve(window.heic2any);
+      s.onerror = () => reject(new Error("HEIC変換ライブラリの読み込みに失敗しました"));
+      document.head.appendChild(s);
+    });
+  }
+  return heicLibPromise;
+}
+
+async function convertHeicToJpeg(file) {
+  const heic2any = await loadHeicLib();
+  const out = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.92 });
+  const blob = Array.isArray(out) ? out[0] : out;
+  return new File([blob], file.name.replace(/\.hei[cf]$/i, ".jpg"), { type: "image/jpeg" });
+}
+
+function showMessage(text, kind = "") {
+  const el = $("#message");
+  el.textContent = text;
+  el.className = kind;
+}
+
+function showPayload(payload) {
+  $("#payload-preview").hidden = false;
+  $("#payload-json").textContent = JSON.stringify(payload, null, 2);
+}
+
+function optionsHtml(items, placeholder) {
+  const head = placeholder ? `<option value="">${placeholder}</option>` : "";
+  return head + items.map((i) => `<option value="${i.id}">${i.name}</option>`).join("");
+}
+
+// ---------- タブ切り替え ----------
+
+$("#tab-expense").addEventListener("click", () => switchTab("expense"));
+$("#tab-income").addEventListener("click", () => switchTab("income"));
+function switchTab(which) {
+  $("#tab-expense").classList.toggle("active", which === "expense");
+  $("#tab-income").classList.toggle("active", which === "income");
+  $("#panel-expense").hidden = which !== "expense";
+  $("#panel-income").hidden = which !== "income";
+  showMessage("");
+}
+
+// ---------- 支出: 用途ブロック ----------
+
+function useBlockHtml() {
+  return `
+    <div class="grid">
+      <div class="field"><label class="label">用途名</label>
+        <input type="text" class="u-name" placeholder="例: 学園祭参加のため"></div>
+      <div class="field"><label class="label">金額（円）</label>
+        <input type="number" class="u-amount" min="1" step="1" inputmode="numeric"></div>
+      <div class="field"><label class="label">カテゴリ</label>
+        <select class="u-category">${optionsHtml(CATEGORIES, "選択してください")}</select></div>
+      <div class="field"><label class="label">報告科目</label>
+        <select class="u-subject">${optionsHtml(EXPENSE_SUBJECTS, "選択してください")}</select></div>
+      <div class="field"><label class="label">品目名</label>
+        <input type="text" class="u-item" placeholder="例: 学園祭参加費"></div>
+      <div class="field"><label class="label">メモ</label>
+        <input type="text" class="u-memo"></div>
+    </div>`;
+}
+
+function addUseBlock(card) {
+  const uses = $(".uses", card);
+  if ($$(".use-block", uses).length >= LIMITS.maxUsesPerReceipt) {
+    showMessage(`用途は1件の領収書につき最大${LIMITS.maxUsesPerReceipt}件までです。それ以上は提出を分けてください。`, "error");
+    return;
+  }
+  const div = document.createElement("div");
+  div.className = "use-block";
+  div.innerHTML = `<h4>用途</h4>${useBlockHtml()}
+    <button type="button" class="sub danger remove-use">この用途を削除</button>`;
+  $(".remove-use", div).addEventListener("click", () => {
+    div.remove();
+    refreshCard(card);
+  });
+  $$("input, select", div).forEach((el) => el.addEventListener("input", () => refreshCard(card)));
+  uses.appendChild(div);
+  refreshCard(card);
+}
+
+function receiptFieldsHtml() {
+  return `
+    <div class="grid">
+      <div class="field"><label class="label">購入日</label>
+        <input type="date" class="r-date"></div>
+      <div class="field"><label class="label">購入者氏名</label>
+        <input type="text" class="r-buyer"></div>
+      <div class="field"><label class="label">購入先</label>
+        <input type="text" class="r-vendor"></div>
+      <div class="field"><label class="label">支払方法</label>
+        <select class="r-payment">${optionsHtml(PAYMENT_METHODS, "選択してください")}</select></div>
+      <div class="field"><label class="label">領収書全体の金額（円）</label>
+        <input type="number" class="r-total" min="1" step="1" inputmode="numeric"></div>
+    </div>
+    <div class="uses"></div>
+    <button type="button" class="sub add-use">＋ 用途を追加</button>
+    <div class="sum-check"></div>`;
+}
+
+function collectUses(card) {
+  return $$(".use-block", card).map((b) => ({
+    name: $(".u-name", b).value.trim(),
+    amount: Number($(".u-amount", b).value || 0),
+    categoryId: $(".u-category", b).value,
+    subjectId: $(".u-subject", b).value,
+    itemName: $(".u-item", b).value.trim(),
+    memo: $(".u-memo", b).value.trim(),
+  }));
+}
+
+function refreshCard(card) {
+  const uses = collectUses(card);
+  const sum = uses.reduce((a, u) => a + (u.amount || 0), 0);
+  const totalInput = $(".r-total", card);
+  const total = totalInput ? Number(totalInput.value || 0) : 0;
+  const box = $(".sum-check", card);
+  if (!box) return;
+  if (total > 0) {
+    const diff = total - sum;
+    box.textContent = diff === 0
+      ? `用途の合計 ${sum.toLocaleString()}円 ＝ 領収書全体の金額。一致しています。`
+      : `用途の合計 ${sum.toLocaleString()}円 / 領収書全体 ${total.toLocaleString()}円（差額 ${diff.toLocaleString()}円）`;
+    box.className = "sum-check " + (diff === 0 ? "ok" : "ng");
+  } else {
+    box.textContent = `用途の合計 ${sum.toLocaleString()}円`;
+    box.className = "sum-check";
+  }
+  validateExpense();
+}
+
+function bindCard(card) {
+  $(".add-use", card).addEventListener("click", () => addUseBlock(card));
+  $$("input, select", card).forEach((el) => el.addEventListener("input", () => refreshCard(card)));
+  addUseBlock(card);
+}
+
+// ---------- 支出: 領収書あり ----------
+
+const receipts = []; // { file, hash, card }
+
+$("#receipt-files").addEventListener("change", async (ev) => {
+  showMessage("");
+  const files = [...ev.target.files];
+  if (receipts.length + files.length > LIMITS.maxReceiptsPerSubmission) {
+    showMessage(`領収書は1回の提出で最大${LIMITS.maxReceiptsPerSubmission}件までです。`, "error");
+    ev.target.value = "";
+    return;
+  }
+  for (let file of files) {
+    try {
+      if (isHeic(file)) {
+        showMessage(`${file.name} をJPEGに変換しています…`);
+        file = await convertHeicToJpeg(file);
+      }
+      const hash = await sha256Hex(file);
+      const card = document.createElement("div");
+      card.className = "receipt-card";
+      const preview = file.type.startsWith("image/")
+        ? `<img class="preview" alt="領収書プレビュー">`
+        : `<p class="hint">PDFファイルです（プレビューなし）</p>`;
+      card.innerHTML = `<h3></h3>${preview}${receiptFieldsHtml()}
+        <p class="hash">SHA-256: ${hash}</p>`;
+      $("h3", card).textContent = file.name;
+      if (file.type.startsWith("image/")) {
+        $("img.preview", card).src = URL.createObjectURL(file);
+      }
+      // 先行する領収書の購入者氏名を引き継ぐ（入力の手間と表記ゆれの削減）
+      const firstBuyer = receipts[0] && $(".r-buyer", receipts[0].card).value;
+      $("#receipt-list").appendChild(card);
+      bindCard(card);
+      if (firstBuyer) $(".r-buyer", card).value = firstBuyer;
+      receipts.push({ file, hash, card });
+    } catch (e) {
+      showMessage(`${file.name} の処理に失敗しました: ${e.message}`, "error");
+    }
+  }
+  ev.target.value = "";
+  showMessage("");
+  validateExpense();
+});
+
+// ---------- 支出: 領収書なし ----------
+
+const noReceiptCard = $("#no-receipt-card");
+noReceiptCard.innerHTML = `
+  <h3>領収書なしの支出</h3>
+  ${receiptFieldsHtml().replace("領収書全体の金額（円）", "支出金額（円）")}
+  <div class="field" style="margin-top:12px">
+    <label class="label">領収証等による証明ができない理由</label>
+    <textarea class="r-noreceipt-reason" rows="2" placeholder="例: 自動販売機での購入のため領収書が発行されない"></textarea>
+  </div>`;
+bindCard(noReceiptCard);
+
+$$('input[name="receipt-mode"]').forEach((r) =>
+  r.addEventListener("change", () => {
+    const without = $('input[name="receipt-mode"]:checked').value === "without";
+    $("#expense-with").hidden = without;
+    $("#expense-without").hidden = !without;
+    validateExpense();
+  })
+);
+
+// ---------- 支出: 検証と送信 ----------
+
+function validateReceiptCard(card, label) {
+  const errors = [];
+  if (!$(".r-date", card).value) errors.push(`${label}: 購入日が未入力です`);
+  if (!$(".r-buyer", card).value.trim()) errors.push(`${label}: 購入者氏名が未入力です`);
+  if (!$(".r-vendor", card).value.trim()) errors.push(`${label}: 購入先が未入力です`);
+  if (!$(".r-payment", card).value) errors.push(`${label}: 支払方法が未選択です`);
+  const total = Number($(".r-total", card).value || 0);
+  if (total <= 0) errors.push(`${label}: 金額が未入力です`);
+  const uses = collectUses(card);
+  if (uses.length === 0) errors.push(`${label}: 用途がありません`);
+  uses.forEach((u, i) => {
+    if (!u.name) errors.push(`${label}: 用途${i + 1}の用途名が未入力です`);
+    if (u.amount <= 0) errors.push(`${label}: 用途${i + 1}の金額が未入力です`);
+    if (!u.categoryId) errors.push(`${label}: 用途${i + 1}のカテゴリが未選択です`);
+    if (!u.subjectId) errors.push(`${label}: 用途${i + 1}の報告科目が未選択です`);
+    if (!u.itemName) errors.push(`${label}: 用途${i + 1}の品目名が未入力です`);
+  });
+  const sum = uses.reduce((a, u) => a + u.amount, 0);
+  if (total > 0 && sum !== total) {
+    errors.push(`${label}: 用途の合計（${sum.toLocaleString()}円）が領収書全体の金額（${total.toLocaleString()}円）と一致しません`);
+  }
+  return errors;
+}
+
+function validateExpense() {
+  const without = $('input[name="receipt-mode"]:checked').value === "without";
+  let errors = [];
+  if (without) {
+    errors = validateReceiptCard(noReceiptCard, "領収書なし支出");
+    if (!$(".r-noreceipt-reason", noReceiptCard).value.trim()) {
+      errors.push("証明できない理由が未入力です");
+    }
+  } else {
+    if (receipts.length === 0) errors = ["領収書ファイルが選択されていません"];
+    receipts.forEach((r, i) => {
+      errors = errors.concat(validateReceiptCard(r.card, `領収書${i + 1}（${r.file.name}）`));
+    });
+  }
+  $("#submit-expense").disabled = errors.length > 0;
+  return errors;
+}
+
+function receiptPayload(card) {
+  return {
+    purchaseDate: $(".r-date", card).value,
+    buyerName: $(".r-buyer", card).value.trim(),
+    vendor: $(".r-vendor", card).value.trim(),
+    paymentMethodId: $(".r-payment", card).value,
+    receiptTotal: Number($(".r-total", card).value || 0),
+    uses: collectUses(card),
+  };
+}
+
+$("#submit-expense").addEventListener("click", async () => {
+  const errors = validateExpense();
+  if (errors.length) {
+    showMessage(errors.join("\n"), "error");
+    return;
+  }
+  const without = $('input[name="receipt-mode"]:checked').value === "without";
+  const payload = {
+    clientRequestId: crypto.randomUUID(),
+    kind: "expense",
+    submittedAt: new Date().toISOString(),
+    receipts: [],
+  };
+  if (without) {
+    payload.receipts.push({
+      ...receiptPayload(noReceiptCard),
+      file: null,
+      proofImpossible: true,
+      proofImpossibleReason: $(".r-noreceipt-reason", noReceiptCard).value.trim(),
+    });
+  } else {
+    for (const r of receipts) {
+      payload.receipts.push({
+        ...receiptPayload(r.card),
+        file: {
+          name: r.file.name,
+          mimeType: r.file.type,
+          sha256: r.hash,
+          base64: await blobToBase64(r.file),
+        },
+        proofImpossible: false,
+      });
+    }
+  }
+  await submitPayload(payload);
+});
+
+// ---------- 収入 ----------
+
+const incomeSubjectSel = $("#income-subject");
+incomeSubjectSel.innerHTML = optionsHtml(INCOME_SUBJECTS, "選択してください");
+incomeSubjectSel.addEventListener("change", () => {
+  const subject = INCOME_SUBJECTS.find((s) => s.id === incomeSubjectSel.value);
+  $("#income-detail-field").hidden = !(subject && subject.requiresDetail);
+  validateIncome();
+});
+$("#income-amount").addEventListener("input", validateIncome);
+$("#income-detail").addEventListener("input", validateIncome);
+
+function validateIncome() {
+  const subject = INCOME_SUBJECTS.find((s) => s.id === incomeSubjectSel.value);
+  const amount = Number($("#income-amount").value || 0);
+  let ok = !!subject && amount > 0;
+  if (ok && subject.requiresDetail) ok = $("#income-detail").value.trim().length > 0;
+  $("#submit-income").disabled = !ok;
+  return ok;
+}
+validateIncome();
+validateExpense();
+
+$("#submit-income").addEventListener("click", async () => {
+  if (!validateIncome()) return;
+  const payload = {
+    clientRequestId: crypto.randomUUID(),
+    kind: "income",
+    submittedAt: new Date().toISOString(),
+    subjectId: incomeSubjectSel.value,
+    amount: Number($("#income-amount").value || 0),
+    detail: $("#income-detail").value.trim(),
+  };
+  await submitPayload(payload);
+});
+
+// ---------- 送信 ----------
+
+async function submitPayload(payload) {
+  showPayload(payload); // 皮の段階では常にペイロードを確認できるようにする
+  try {
+    const res = await fetch("/api/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.ok) {
+      showMessage(
+        data.mock
+          ? `受け付けました（モック応答）。申請ID: ${data.applicationId}\n※まだ台帳には記録されていません。GAS接続後に有効になります。`
+          : `報告が完了しました。申請ID: ${data.applicationId}`,
+        "success"
+      );
+    } else {
+      showMessage(`送信に失敗しました: ${data.error || res.status}`, "error");
+    }
+  } catch (e) {
+    showMessage(
+      "APIに接続できませんでした（ローカルプレビュー中は正常です）。送信ペイロードは下部に表示されています。",
+      "error"
+    );
+  }
+}
