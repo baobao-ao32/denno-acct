@@ -44,7 +44,8 @@ function validatePayload_(p) {
         if (!isFinite(u.amount) || u.amount <= 0) return "use amount must be positive";
         sum += u.amount;
       }
-      if (sum !== r.receiptTotal) return "use amounts do not sum to receiptTotal";
+      // 合計の完全一致は登録時に取引単位で検証する (分割提出の追記があるため、ここでは超過のみ弾く)
+      if (sum > r.receiptTotal) return "use amounts exceed receiptTotal";
       if (r.proofImpossible) {
         if (!(typeof r.proofImpossibleReason === "string" && r.proofImpossibleReason.trim())) {
           return "proofImpossibleReason is required";
@@ -53,6 +54,10 @@ function validatePayload_(p) {
         return "receipt file is required";
       }
     }
+    return null;
+  }
+  if (p.action === "checkReceipt") {
+    if (!/^[0-9a-f]{64}$/.test(p.sha256 || "")) return "sha256 must be 64 hex chars";
     return null;
   }
   if (p.action === "void") {

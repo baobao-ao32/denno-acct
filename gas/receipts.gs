@@ -27,6 +27,57 @@ function representativeCategoryId_(uses) {
   return best;
 }
 
+/**
+ * 全年度の台帳を走査して、同じSHA256の領収書を持つ取引を探す。
+ * 見つかれば { fy, row } (row は findTransactionByHash_ と同じ形) を返す。
+ */
+function findReceiptByHashAllYears_(props, sha256) {
+  const root = DriveApp.getFolderById(props.getProperty("ROOT_FOLDER_ID"));
+  const folders = root.getFolders();
+  while (folders.hasNext()) {
+    const f = folders.next();
+    const m = f.getName().match(/^(\d{4})年度$/);
+    if (!m) continue;
+    const ssFile = findChildFile_(f, f.getName() + "会計記録");
+    if (!ssFile) continue;
+    const ss = SpreadsheetApp.openById(ssFile.getId());
+    const ledger = ss.getSheetByName("取引明細");
+    if (!ledger) continue;
+    const found = findTransactionByHash_(ledger, sha256);
+    if (found) return { fy: parseInt(m[1], 10), row: found };
+  }
+  return null;
+}
+
+/** 取引の用途金額の合計 (取消分を除く)。 */
+function sumTransactionUses_(ledger, transactionId) {
+  return readAllRows_(ledger)
+    .filter((r) => r["取引ID"] === transactionId && !r["取消フラグ"])
+    .reduce((a, r) => a + Number(r["用途別金額合計"] || 0), 0);
+}
+
+/** フォームからの事前照会: その領収書ファイルが既に登録されているか。 */
+function checkReceipt_(p, props) {
+  const found = findReceiptByHashAllYears_(props, p.sha256);
+  if (!found) return { ok: true, exists: false };
+  const r = found.row;
+  const root = DriveApp.getFolderById(props.getProperty("ROOT_FOLDER_ID"));
+  const yearFolder = findChildFolder_(root, fiscalYearLabel_(found.fy));
+  const ssFile = findChildFile_(yearFolder, fiscalYearLabel_(found.fy) + "会計記録");
+  const ss = SpreadsheetApp.openById(ssFile.getId());
+  const registeredAmount = sumTransactionUses_(ss.getSheetByName("取引明細"), r["取引ID"]);
+  return {
+    ok: true,
+    exists: true,
+    transactionId: r["取引ID"],
+    fiscalYear: found.fy,
+    purchaseDate: r["購入日"],
+    receiptTotal: Number(r["領収書全体の金額"] || 0),
+    registeredAmount: registeredAmount,
+    buyerName: r["購入者氏名"],
+  };
+}
+
 /** 同じSHA256の領収書を持つ既存取引を探す。見つかればその取引IDと最大の明細番号を返す。 */
 function findTransactionByHash_(ledger, sha256) {
   const rows = readAllRows_(ledger).filter((r) => r["領収書ファイルSHA256"] === sha256 && !r["取消フラグ"]);

@@ -39,6 +39,9 @@ function doPost(e) {
     if (payload.kind === "expense") {
       return json_(registerExpense_(payload, props));
     }
+    if (payload.action === "checkReceipt") {
+      return json_(checkReceipt_(payload, props));
+    }
     if (payload.action === "void") {
       return json_(voidTransaction_(payload, props));
     }

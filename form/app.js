@@ -57,7 +57,9 @@ function showMessage(text, kind = "") {
   el.className = kind;
 }
 
+const DEBUG = new URLSearchParams(location.search).has("debug");
 function showPayload(payload) {
+  if (!DEBUG) return; // ペイロード表示は ?debug=1 のときだけ
   $("#payload-preview").hidden = false;
   $("#payload-json").textContent = JSON.stringify(payload, null, 2);
 }
@@ -153,13 +155,16 @@ function refreshCard(card) {
   const sum = uses.reduce((a, u) => a + (u.amount || 0), 0);
   const totalInput = $(".r-total", card);
   const total = totalInput ? Number(totalInput.value || 0) : 0;
+  // 追記モードでは、今回の用途合計は「領収書全体 − 登録済み合計」に一致すべき
+  const registered = Number(card.dataset.registeredAmount || 0);
+  const target = total - registered;
   const box = $(".sum-check", card);
   if (!box) return;
   if (total > 0) {
-    const diff = total - sum;
+    const diff = target - sum;
     box.textContent = diff === 0
-      ? `用途の合計 ${sum.toLocaleString()}円 ＝ 領収書全体の金額。一致しています。`
-      : `用途の合計 ${sum.toLocaleString()}円 / 領収書全体 ${total.toLocaleString()}円（差額 ${diff.toLocaleString()}円）`;
+      ? `用途の合計 ${sum.toLocaleString()}円 ＝ ${registered > 0 ? "残りの金額" : "領収書全体の金額"}。一致しています。`
+      : `用途の合計 ${sum.toLocaleString()}円 / 目標 ${target.toLocaleString()}円（差額 ${diff.toLocaleString()}円）`;
     box.className = "sum-check " + (diff === 0 ? "ok" : "ng");
   } else {
     box.textContent = `用途の合計 ${sum.toLocaleString()}円`;
@@ -199,7 +204,9 @@ $("#receipt-files").addEventListener("change", async (ev) => {
         ? `<img class="preview" alt="領収書プレビュー">`
         : `<p class="hint">PDFファイルです（プレビューなし）</p>`;
       card.innerHTML = `<h3></h3>${preview}${receiptFieldsHtml()}
-        <p class="hash">SHA-256: ${hash}</p>`;
+        <p class="hash">SHA-256: ${hash}</p>
+        <p class="dup-notice sum-check ok" hidden></p>
+        <button type="button" class="sub danger remove-receipt">この領収書を取り消す</button>`;
       $("h3", card).textContent = file.name;
       if (file.type.startsWith("image/")) {
         $("img.preview", card).src = URL.createObjectURL(file);
@@ -209,7 +216,15 @@ $("#receipt-files").addEventListener("change", async (ev) => {
       $("#receipt-list").appendChild(card);
       bindCard(card);
       if (firstBuyer) $(".r-buyer", card).value = firstBuyer;
-      receipts.push({ file, hash, card });
+      const entry = { file, hash, card };
+      receipts.push(entry);
+      $(".remove-receipt", card).addEventListener("click", () => {
+        const i = receipts.indexOf(entry);
+        if (i >= 0) receipts.splice(i, 1);
+        card.remove();
+        validateExpense();
+      });
+      checkDuplicateReceipt(entry);
     } catch (e) {
       showMessage(`${file.name} の処理に失敗しました: ${e.message}`, "error");
     }
@@ -218,6 +233,35 @@ $("#receipt-files").addEventListener("change", async (ev) => {
   showMessage("");
   validateExpense();
 });
+
+/** 登録済み領収書の事前照会。登録済みなら用途追記の提出になることを知らせる。 */
+async function checkDuplicateReceipt(entry) {
+  try {
+    const res = await fetch("/api/receipts/check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sha256: entry.hash }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.exists) return;
+    entry.appendToTransactionId = data.transactionId;
+    entry.card.dataset.registeredAmount = String(data.registeredAmount || 0);
+    const notice = $(".dup-notice", entry.card);
+    notice.hidden = false;
+    notice.textContent =
+      `この領収書は登録済みです（取引ID: ${data.transactionId}）。送信すると、用途がこの取引に追加されます。`;
+    // 既存取引の購入日・総額を引き継ぐ（ズレると別取引になってしまうため）
+    if (data.purchaseDate && !$(".r-date", entry.card).value) {
+      $(".r-date", entry.card).value = data.purchaseDate;
+    }
+    if (data.receiptTotal && !$(".r-total", entry.card).value) {
+      $(".r-total", entry.card).value = data.receiptTotal;
+    }
+    refreshCard(entry.card);
+  } catch {
+    // ローカルプレビュー等、APIが無い環境では照会を黙ってスキップする
+  }
+}
 
 // ---------- 支出: 領収書なし ----------
 
@@ -260,8 +304,9 @@ function validateReceiptCard(card, label) {
     if (!u.itemName) errors.push(`${label}: 用途${i + 1}の品目名が未入力です`);
   });
   const sum = uses.reduce((a, u) => a + u.amount, 0);
-  if (total > 0 && sum !== total) {
-    errors.push(`${label}: 用途の合計（${sum.toLocaleString()}円）が領収書全体の金額（${total.toLocaleString()}円）と一致しません`);
+  const target = total - Number(card.dataset.registeredAmount || 0);
+  if (total > 0 && sum !== target) {
+    errors.push(`${label}: 用途の合計（${sum.toLocaleString()}円）が目標額（${target.toLocaleString()}円）と一致しません`);
   }
   return errors;
 }
@@ -368,6 +413,19 @@ $("#submit-income").addEventListener("click", async () => {
   await submitPayload(payload);
 });
 
+function resetForms() {
+  receipts.length = 0;
+  $("#receipt-list").innerHTML = "";
+  $$("input, select, textarea", noReceiptCard).forEach((el) => { el.value = ""; });
+  $$(".use-block", noReceiptCard).forEach((b, i) => { if (i > 0) b.remove(); });
+  incomeSubjectSel.value = "";
+  $("#income-amount").value = "";
+  $("#income-detail").value = "";
+  $("#income-detail-field").hidden = true;
+  validateExpense();
+  validateIncome();
+}
+
 // ---------- 送信 ----------
 
 async function submitPayload(payload) {
@@ -386,6 +444,7 @@ async function submitPayload(payload) {
           : `報告が完了しました。申請ID: ${data.applicationId}`,
         "success"
       );
+      resetForms();
     } else {
       showMessage(`送信に失敗しました: ${data.error || res.status}`, "error");
     }

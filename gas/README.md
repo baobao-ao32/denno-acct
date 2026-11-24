@@ -46,6 +46,9 @@ Cloudflare Worker から JSON を受け取り、Googleドライブ上の年度�
 - 登録のたびにサマリ / 収入 / 支出タブを再計算して値で書き込む
 - 取消は `POST { action: "void", transactionId, reason }`。行は消さず取消フラグを立てる
 - 状態確認は `POST { action: "status", clientRequestId }`
+- 領収書の事前照会は `POST { action: "checkReceipt", sha256 }`。登録済みなら取引ID・登録済み金額合計などを返す
+- 金額の完全一致（用途合計 = 領収書全体の金額）は登録時に取引単位で検証する。
+  分割提出の追記では「登録済み合計 + 今回の合計 = 全体の金額」を要求する
 
 ## まだ本番確認していないこと
 

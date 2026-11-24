@@ -51,7 +51,8 @@ function validatePayload(p) {
       if (r.uses.length > MAX_USES) return `too many uses (max ${MAX_USES})`;
       if (!r.uses.every(validateUse)) return "invalid use entry";
       const sum = r.uses.reduce((a, u) => a + u.amount, 0);
-      if (sum !== r.receiptTotal) return "use amounts do not sum to receiptTotal";
+      // 完全一致は GAS が取引単位で検証する (分割提出の追記があるため、ここでは超過のみ弾く)
+      if (sum > r.receiptTotal) return "use amounts exceed receiptTotal";
       if (r.proofImpossible) {
         if (!isNonEmptyString(r.proofImpossibleReason)) return "proofImpossibleReason is required";
       } else if (!r.file || !isNonEmptyString(r.file.sha256) || !isNonEmptyString(r.file.base64)) {
@@ -63,12 +64,48 @@ function validatePayload(p) {
   return "unknown kind";
 }
 
+async function forwardToGas(env, payload) {
+  const res = await fetch(env.GAS_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${env.API_TOKEN}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  return json(data, res.ok ? 200 : 502);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
     if (url.pathname === "/api/health") {
       return json({ ok: true, gasConnected: Boolean(env.GAS_ENDPOINT) });
+    }
+
+    // 領収書ファイルの事前照会 (登録済みなら用途の追記になる)
+    if (url.pathname === "/api/receipts/check" && request.method === "POST") {
+      let body;
+      try {
+        body = await request.json();
+      } catch {
+        return json({ ok: false, error: "invalid JSON" }, 400);
+      }
+      if (!/^[0-9a-f]{64}$/.test(body.sha256 || "")) {
+        return json({ ok: false, error: "sha256 must be 64 hex chars" }, 400);
+      }
+      if (!env.GAS_ENDPOINT) return json({ ok: true, mock: true, exists: false });
+      return forwardToGas(env, { action: "checkReceipt", sha256: body.sha256 });
+    }
+
+    // 提出の状態照会
+    if (url.pathname === "/api/status" && request.method === "GET") {
+      const clientRequestId = url.searchParams.get("clientRequestId");
+      if (!clientRequestId) return json({ ok: false, error: "clientRequestId is required" }, 400);
+      if (!env.GAS_ENDPOINT) return json({ ok: true, mock: true, found: false });
+      return forwardToGas(env, { action: "status", clientRequestId });
     }
 
     if (url.pathname === "/api/submit" && request.method === "POST") {
@@ -86,16 +123,7 @@ export default {
         return json({ ok: true, mock: true, applicationId: `mock-${payload.clientRequestId.slice(0, 8)}` });
       }
 
-      const res = await fetch(env.GAS_ENDPOINT, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${env.API_TOKEN}`,
-        },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json().catch(() => ({}));
-      return json(data, res.ok ? 200 : 502);
+      return forwardToGas(env, payload);
     }
 
     return json({ ok: false, error: "not found" }, 404);

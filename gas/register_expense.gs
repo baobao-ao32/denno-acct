@@ -57,15 +57,33 @@ function registerOneReceipt_(receipt, p, props) {
 
   // 既存領収書への用途追記 (ファイルのハッシュで照合)
   if (!receipt.proofImpossible && receipt.file && receipt.file.sha256) {
-    const existing = findTransactionByHash_(ledger, receipt.file.sha256);
+    let appendEnv = env;
+    let appendSs = ss;
+    let appendFy = fy;
+    let existing = findTransactionByHash_(ledger, receipt.file.sha256);
+    if (!existing) {
+      // 購入日の入力ミス等で年度がズレていても重複登録しないよう、全年度から探す
+      const found = findReceiptByHashAllYears_(props, receipt.file.sha256);
+      if (found) {
+        appendEnv = ensureFiscalEnv_(found.fy, props);
+        appendSs = appendEnv.ss;
+        appendFy = found.fy;
+        existing = findTransactionByHash_(appendSs.getSheetByName("取引明細"), receipt.file.sha256);
+      }
+    }
     if (existing) {
       const transactionId = existing["取引ID"];
+      const existingSum = sumTransactionUses_(appendSs.getSheetByName("取引明細"), transactionId);
+      const newSum = receipt.uses.reduce((a, u) => a + u.amount, 0);
+      if (existingSum + newSum !== receipt.receiptTotal) {
+        throw new Error("use amounts do not complete receiptTotal: registered " + existingSum + " + new " + newSum + " != " + receipt.receiptTotal);
+      }
       const rows = receipt.uses.map((u, i) => buildLedgerRow_({
         transactionId: transactionId,
         detailIndex: existing._maxDetailIndex + i + 1,
         kind: "expense",
         clientRequestId: p.clientRequestId,
-        purchaseDate: receipt.purchaseDate,
+        purchaseDate: existing["購入日"] || receipt.purchaseDate,
         submittedAt: p.submittedAt,
         now: now,
         buyerName: receipt.buyerName,
@@ -80,14 +98,19 @@ function registerOneReceipt_(receipt, p, props) {
         proofImpossible: false,
         proofImpossibleReason: "",
       }));
-      appendRowsByHeader_(ledger, rows);
-      moveReceiptFileIfNeeded_(env, existing, receipt.uses, props);
-      recompute_(ss, fy, props);
+      appendRowsByHeader_(appendSs.getSheetByName("取引明細"), rows);
+      appendLog_(appendSs.getSheetByName("APIログ"), p.clientRequestId, "expense", transactionId, "ok-appended");
+      moveReceiptFileIfNeeded_(appendEnv, existing, receipt.uses, props);
+      recompute_(appendSs, appendFy, props);
       return { transactionId: transactionId, appended: true };
     }
   }
 
-  // 新規取引
+  // 新規取引 (用途の合計が領収書全体の金額と完全一致すること)
+  const useSum = receipt.uses.reduce((a, u) => a + u.amount, 0);
+  if (useSum !== receipt.receiptTotal) {
+    throw new Error("use amounts do not sum to receiptTotal: " + useSum + " != " + receipt.receiptTotal);
+  }
   const transactionId = "TX-" + Utilities.getUuid();
   const repCategoryId = representativeCategoryId_(receipt.uses);
   let receiptUrl = "";
