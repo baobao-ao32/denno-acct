@@ -9,6 +9,11 @@ import {
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
+// API の接続先 (方法B: ドメイン無し)。Worker をデプロイしたら、その
+// workers.dev URL をここに入れる。例: "https://denno-acct-api.example.workers.dev"
+// "" のままなら同一オリジンの相対パスで呼ぶ (方法A: 独自ドメイン構成用)。
+const API_BASE = "";
+
 // ---------- 共通ユーティリティ ----------
 
 async function sha256Hex(blob) {
@@ -237,7 +242,7 @@ $("#receipt-files").addEventListener("change", async (ev) => {
 /** 登録済み領収書の事前照会。登録済みなら用途追記の提出になることを知らせる。 */
 async function checkDuplicateReceipt(entry) {
   try {
-    const res = await fetch("/api/receipts/check", {
+    const res = await fetch(API_BASE + "/api/receipts/check", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sha256: entry.hash }),
@@ -431,7 +436,7 @@ function resetForms() {
 async function submitPayload(payload) {
   showPayload(payload); // 皮の段階では常にペイロードを確認できるようにする
   try {
-    const res = await fetch("/api/submit", {
+    const res = await fetch(API_BASE + "/api/submit", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),

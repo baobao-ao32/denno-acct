@@ -2,14 +2,23 @@
 // 役割: ブラウザからの提出を受け、APIトークンを付けて GAS Web App へ転送する。
 // トークンは Worker の Secret (API_TOKEN) に置き、ブラウザ側には露出させない。
 // GAS_ENDPOINT が未設定の間はモック応答を返す（フォームの皮の確認用）。
+// 配置は方法B (2026-11-25 決定): フォーム (pages.dev) から workers.dev の
+// Worker をクロスオリジンで呼ぶため、CORS を許可する。許可オリジンは当面 "*"
+// とし、本番切替時は Cloudflare Access 側で入口を絞る。
 
 const MAX_RECEIPTS = 5;
 const MAX_USES = 10;
 
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CORS_HEADERS },
   });
 }
 
@@ -80,6 +89,11 @@ async function forwardToGas(env, payload) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+
+    // CORS プリフライト
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
+    }
 
     if (url.pathname === "/api/health") {
       return json({ ok: true, gasConnected: Boolean(env.GAS_ENDPOINT) });
