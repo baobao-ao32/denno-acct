@@ -379,7 +379,7 @@ $("#submit-expense").addEventListener("click", async () => {
       });
     }
   }
-  await submitPayload(payload);
+  await submitPayload(payload, $("#submit-expense"));
 });
 
 // ---------- 収入 ----------
@@ -415,7 +415,7 @@ $("#submit-income").addEventListener("click", async () => {
     amount: Number($("#income-amount").value || 0),
     detail: $("#income-detail").value.trim(),
   };
-  await submitPayload(payload);
+  await submitPayload(payload, $("#submit-income"));
 });
 
 function resetForms() {
@@ -433,8 +433,12 @@ function resetForms() {
 
 // ---------- 送信 ----------
 
-async function submitPayload(payload) {
+async function submitPayload(payload, btn) {
   showPayload(payload); // 皮の段階では常にペイロードを確認できるようにする
+  if (btn) {
+    btn.classList.add("loading");
+    btn.disabled = true;
+  }
   try {
     const res = await fetch(API_BASE + "/api/submit", {
       method: "POST",
@@ -458,5 +462,12 @@ async function submitPayload(payload) {
       "APIに接続できませんでした（ローカルプレビュー中は正常です）。送信ペイロードは下部に表示されています。",
       "error"
     );
+  } finally {
+    if (btn) {
+      btn.classList.remove("loading");
+      // disabled は検証結果に基づいて戻す (成功時はリセット済みフォームで再判定される)
+      validateExpense();
+      validateIncome();
+    }
   }
 }
