@@ -39,12 +39,45 @@ function previousYearIncomeBySubject_(fy, props) {
 }
 
 /**
+ * 収入タブの既存の備考を {科目名: 備考} で返す。合計・繰越金の行は除く。
+ * 備考は人間が書く欄のため、再計算で消さないよう先に読み取っておく。
+ */
+function readIncomeRemarks_(sheet) {
+  const out = {};
+  readAllRows_(sheet).forEach((r) => {
+    if (r["科目"] && r["科目"] !== "収入合計" && r["科目"] !== "前年度繰越金") {
+      out[r["科目"]] = r["備考"] || "";
+    }
+  });
+  return out;
+}
+
+/**
+ * 支出タブの既存の備考を {"大分類|科目": 備考} で返す。合計行は除く。
+ * 大分類はグループ先頭行にしか書かれていないため、直前の値を引き継いで読む。
+ */
+function readExpenseRemarks_(sheet) {
+  const out = {};
+  let cat = "";
+  readAllRows_(sheet).forEach((r) => {
+    if (r["大分類"]) cat = r["大分類"];
+    if (r["科目"] && r["科目"] !== "支出合計") {
+      out[cat + "|" + r["科目"]] = r["備考"] || "";
+    }
+  });
+  return out;
+}
+
+/**
  * 取引明細からサマリ/収入/支出タブを再計算して値で書き込む。
  * 繰越金は設定タブの「前年度繰越金」から読む (報告対象外として別行に置く)。
+ * 収入・支出タブの備考は人間が書く欄のため、再計算の前後で保持する。
  */
 function recompute_(ss, fy, props) {
   const ledger = ss.getSheetByName("取引明細");
   const rows = readAllRows_(ledger).filter((r) => !r["取消フラグ"]);
+  const incomeRemarks = readIncomeRemarks_(ss.getSheetByName("収入"));
+  const expenseRemarks = readExpenseRemarks_(ss.getSheetByName("支出"));
 
   let incomeTotal = 0;
   let expenseTotal = 0;
@@ -97,7 +130,7 @@ function recompute_(ss, fy, props) {
       INCOME_SUBJECTS[id],
       amount,
       prev === undefined ? "-" : amount - prev,
-      "",
+      incomeRemarks[INCOME_SUBJECTS[id]] || "",
     ]);
   }
   incomeRows.push(["前年度繰越金", carryover, "-", "報告対象外"]);
@@ -113,7 +146,8 @@ function recompute_(ss, fy, props) {
     for (const subId of Object.keys(EXPENSE_SUBJECTS)) {
       const amount = expenseByGroup[catId + "|" + subId];
       if (!amount) continue;
-      expenseRows.push([CATEGORIES[catId], EXPENSE_SUBJECTS[subId], amount, ""]);
+      expenseRows.push([CATEGORIES[catId], EXPENSE_SUBJECTS[subId], amount,
+        expenseRemarks[CATEGORIES[catId] + "|" + EXPENSE_SUBJECTS[subId]] || ""]);
     }
   }
   // 大分類はグループ先頭行にのみ記入する (報告書の書式に合わせる)
