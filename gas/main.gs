@@ -4,7 +4,7 @@
  *
  * 必須 Script Properties:
  *   ROOT_FOLDER_ID          「会計」ルートフォルダの Drive ファイルID
- *   API_TOKEN               Worker が Authorization: Bearer で送るトークン
+ *   API_TOKEN               Worker がリクエストボディの token フィールドで送る共有トークン
  *
  * 原則 (v2設計):
  * - 保存するのはID、名前は表示するときに引く。台帳にはID列と表示名列の両方を書く
@@ -24,11 +24,16 @@ function doPost(e) {
     lock.waitLock(15000);
     const props = PropertiesService.getScriptProperties();
     const token = props.getProperty("API_TOKEN");
-    const auth = (e.headers && e.headers.Authorization) || "";
-    if (!token || auth !== "Bearer " + token) {
+    // GAS の doPost は HTTP ヘッダを読めないため、トークンはボディで受け取る
+    let payload;
+    try {
+      payload = JSON.parse(e.postData.contents);
+    } catch (parseErr) {
+      return json_({ ok: false, error: "invalid JSON" }, 400);
+    }
+    if (!token || payload.token !== token) {
       return json_({ ok: false, error: "unauthorized" }, 401);
     }
-    const payload = JSON.parse(e.postData.contents);
     const error = validatePayload_(payload);
     if (error) return json_({ ok: false, error: error }, 400);
 

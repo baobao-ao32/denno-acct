@@ -4,7 +4,7 @@
  *
  * 必須 Script Properties:
  *   ROOT_FOLDER_ID          「会計」ルートフォルダの Drive ファイルID
- *   API_TOKEN               Worker が Authorization: Bearer で送るトークン
+ *   API_TOKEN               Worker がリクエストボディの token フィールドで送る共有トークン
  *
  * 原則 (v2設計):
  * - 保存するのはID、名前は表示するときに引く。台帳にはID列と表示名列の両方を書く
@@ -20,7 +20,7 @@
  *
  * 必須 Script Properties:
  *   ROOT_FOLDER_ID          「会計」ルートフォルダの Drive ファイルID
- *   API_TOKEN               Worker が Authorization: Bearer で送るトークン
+ *   API_TOKEN               Worker がリクエストボディの token フィールドで送る共有トークン
  *
  * 原則 (v2設計):
  * - 保存するのはID、名前は表示するときに引く。台帳にはID列と表示名列の両方を書く

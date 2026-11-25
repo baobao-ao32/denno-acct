@@ -74,13 +74,13 @@ function validatePayload(p) {
 }
 
 async function forwardToGas(env, payload) {
+  // GAS の doPost は HTTP ヘッダを読めないため、トークンはボディに入れる
   const res = await fetch(env.GAS_ENDPOINT, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${env.API_TOKEN}`,
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ ...payload, token: env.API_TOKEN }),
   });
   const data = await res.json().catch(() => ({}));
   return json(data, res.ok ? 200 : 502);
@@ -89,6 +89,7 @@ async function forwardToGas(env, payload) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    url.pathname = url.pathname.replace(/\/{2,}/g, "/"); // "//api/submit" のような指定ミスを吸収する
 
     // CORS プリフライト
     if (request.method === "OPTIONS") {
