@@ -1,10 +1,9 @@
 /**
  * denno-acct v2 — GAS 台帳コア（分割済み。GASプロジェクト内の全ファイルが1つの名前空間を共有する）
- * 年度判定（4月スタート）と年度環境の保証（フォルダ/テンプレコピー/ヘッダ検証）
+ * 年度判定（4月スタート）と年度環境の保証（フォルダ/コード生成/ヘッダ検証）
  *
  * 必須 Script Properties:
  *   ROOT_FOLDER_ID          「会計」ルートフォルダの Drive ファイルID
- *   TEMPLATE_SPREADSHEET_ID 「テンプレート_会計記録」のスプレッドシートID
  *   API_TOKEN               Worker が Authorization: Bearer で送るトークン
  *
  * 原則 (v2設計):
@@ -52,7 +51,8 @@ function findChildFile_(parent, name) {
 
 /**
  * 年度環境を保証する。フォルダ・スプレッドシート・領収書フォルダを作るか、既存のものを返す。
- * スプレッドシートはテンプレートをコピーして作る。ヘッダが期待と違う場合は例外を投げる。
+ * スプレッドシートはテンプレートをコピーせず、コードで生成する (書式込み)。
+ * ヘッダが期待と違う場合は例外を投げる。
  */
 function ensureFiscalEnv_(fy, props) {
   const root = DriveApp.getFolderById(props.getProperty("ROOT_FOLDER_ID"));
@@ -73,16 +73,29 @@ function ensureFiscalEnv_(fy, props) {
   let ssFile = findChildFile_(yearFolder, ssName);
   let ss;
   if (!ssFile) {
-    const template = DriveApp.getFileById(props.getProperty("TEMPLATE_SPREADSHEET_ID"));
-    ssFile = template.makeCopy(ssName, yearFolder);
-    ss = SpreadsheetApp.openById(ssFile.getId());
-    ensureTabs_(ss);
+    ss = createFiscalSpreadsheet_(ssName, yearFolder);
   } else {
     ss = SpreadsheetApp.openById(ssFile.getId());
     ensureTabs_(ss);
   }
   return { yearFolder: yearFolder, receiptRoot: receiptRoot, categoryFolders: categoryFolders, ss: ss };
 }
+
+/** 年度スプレッドシートをコードで生成する。テンプレートファイルは不要。 */
+function createFiscalSpreadsheet_(name, yearFolder) {
+  const ss = SpreadsheetApp.create(name);
+  DriveApp.getFileById(ss.getId()).moveTo(yearFolder);
+  ensureTabs_(ss);
+  // SpreadsheetApp.create が作る既定シート (空) が残っていれば除去する
+  for (const sheet of ss.getSheets()) {
+    if (TAB_NAMES.indexOf(sheet.getName()) === -1 && sheet.getLastRow() === 0) {
+      ss.deleteSheet(sheet);
+    }
+  }
+  return ss;
+}
+
+const TAB_NAMES = ["取引明細", "サマリ", "収入", "支出", "設定", "APIログ"];
 
 function ensureTabs_(ss) {
   ensureSheetWithHeaders_(ss, "取引明細", LEDGER_HEADERS);
@@ -99,6 +112,7 @@ function ensureSheetWithHeaders_(ss, name, headers) {
     sheet = ss.insertSheet(name);
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
     sheet.setFrozenRows(1);
+    formatSheet_(sheet, name);
     return sheet;
   }
   const actual = sheet.getRange(1, 1, 1, Math.max(headers.length, sheet.getLastColumn())).getValues()[0];
