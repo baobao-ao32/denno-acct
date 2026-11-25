@@ -4,7 +4,6 @@
  *
  * 必須 Script Properties:
  *   ROOT_FOLDER_ID          「会計」ルートフォルダの Drive ファイルID
- *   TEMPLATE_SPREADSHEET_ID 「テンプレート_会計記録」のスプレッドシートID
  *   API_TOKEN               Worker が Authorization: Bearer で送るトークン
  *
  * 原則 (v2設計):
