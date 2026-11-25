@@ -63,19 +63,20 @@ function getSetting_(ss, key, defaultValue) {
  * テンプレートファイルは使わない。年度スプレッドシートはコードで生成する。
  * 書式は作成時に一度だけ適用する。後から人間が調整した列幅等は上書きしない。
  */
+// widths の単位はピクセル (setColumnWidth の仕様)。文字数ではないので注意。
 const SHEET_FORMATS = {
   "取引明細": {
-    widths: [14, 16, 8, 14, 11, 18, 18, 12, 16, 11, 12, 20, 12, 13, 16, 11, 13, 18, 13, 14, 30, 34, 13, 20, 10, 20, 10, 18, 9, 18, 18],
+    widths: [120, 130, 60, 120, 95, 150, 150, 100, 130, 90, 100, 170, 100, 110, 130, 90, 110, 160, 110, 120, 260, 300, 110, 170, 85, 160, 90, 150, 75, 150, 150],
     money: [19, 20],
     date: [5],
     datetime: [6, 7, 31],
     validations: { 27: ["未精算", "精算済み", "精算不要"] },
   },
-  "サマリ": { widths: [42, 16], money: [2] },
-  "収入": { widths: [24, 14, 16, 40], money: [2, 3] },
-  "支出": { widths: [14, 24, 14, 40], money: [3] },
-  "設定": { widths: [20, 40] },
-  "APIログ": { widths: [38, 10, 40, 19, 14], datetime: [4] },
+  "サマリ": { widths: [320, 130], money: [2] },
+  "収入": { widths: [190, 110, 130, 320], money: [2, 3] },
+  "支出": { widths: [110, 190, 110, 320], money: [3] },
+  "設定": { widths: [160, 320] },
+  "APIログ": { widths: [300, 80, 320, 150, 110], datetime: [4] },
 };
 
 /** 設定タブの初期行 (テンプレートの代わりにコードで入れる)。 */
@@ -119,5 +120,27 @@ function formatSheet_(sheet, name) {
   // 設定タブの初期行
   if (name === "設定" && sheet.getLastRow() < 2) {
     sheet.getRange(2, 1, SETTING_SEED_ROWS.length, 2).setValues(SETTING_SEED_ROWS);
+  }
+}
+
+/**
+ * 保守用: 既存の全年度スプレッドシートに書式 (列幅など) を当て直す。
+ * GAS エディタから手動で実行する。formatSheet_ は冪等なので、実行済みの
+ * シートに再適用してもデータは壊れない (設定タブの初期行も二重に入らない)。
+ */
+function fixAllSheetFormats() {
+  const props = PropertiesService.getScriptProperties();
+  const root = DriveApp.getFolderById(props.getProperty("ROOT_FOLDER_ID"));
+  const years = root.getFolders();
+  while (years.hasNext()) {
+    const yf = years.next();
+    const ssFile = findChildFile_(yf, yf.getName() + "会計記録");
+    if (!ssFile) continue;
+    const ss = SpreadsheetApp.openById(ssFile.getId());
+    for (const name of Object.keys(SHEET_FORMATS)) {
+      const sheet = ss.getSheetByName(name);
+      if (sheet) formatSheet_(sheet, name);
+    }
+    Logger.log("formatted: " + ss.getName());
   }
 }
