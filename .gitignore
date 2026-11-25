@@ -1,3 +1,6 @@
 # clasp 認証・プロジェクト固有設定
 .clasprc.json
 .clasp.json
+
+# wrangler のローカル作業ディレクトリ
+.wrangler/
