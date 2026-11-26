@@ -53,3 +53,15 @@ python generate.py --input <解凍した年度フォルダ>
   （終了コード2）。台帳に無いファイル等の軽微な問題は警告のみ
 - PDFの領収書は pdftoppm（poppler）で画像化して配置する（複数ページは全ページ）
 - 依存: python-pptx, openpyxl, Pillow + poppler-utils（pdftoppm）
+
+## 実行環境（uv）
+
+依存は uv で管理する（pyproject.toml / uv.lock）。初回は `uv run` が
+自動で .venv を作って同期する。
+
+```
+uv run python generate.py --input <解凍した年度フォルダ>
+```
+
+pdftoppm（poppler）だけは uv で管理できないシステム依存なので、
+別途インストールしておくこと。
