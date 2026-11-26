@@ -72,10 +72,17 @@ function registerOneReceipt_(receipt, p, props) {
     }
     if (existing) {
       const transactionId = existing["取引ID"];
+      const storedTotal = Number(existing["領収書全体の金額"] || 0);
       const existingSum = sumTransactionUses_(appendSs.getSheetByName("取引明細"), transactionId);
       const newSum = receipt.uses.reduce((a, u) => a + u.amount, 0);
+      if (storedTotal > 0 && receipt.receiptTotal !== storedTotal) {
+        throw new Error("領収書全体の金額が、登録済みの金額（" + storedTotal.toLocaleString() + "円）と一致しません");
+      }
+      if (storedTotal > 0 && existingSum >= storedTotal) {
+        throw new Error("この領収書は既に登録が完了しています（取引ID: " + transactionId + "）。追加の用途は登録できません");
+      }
       if (existingSum + newSum !== receipt.receiptTotal) {
-        throw new Error("use amounts do not complete receiptTotal: registered " + existingSum + " + new " + newSum + " != " + receipt.receiptTotal);
+        throw new Error("用途の金額が合いません: 登録済み " + existingSum.toLocaleString() + "円 + 今回 " + newSum.toLocaleString() + "円 != 領収書全体 " + receipt.receiptTotal.toLocaleString() + "円（追記は残りの金額をちょうど埋める必要があります）");
       }
       const rows = receipt.uses.map((u, i) => buildLedgerRow_({
         transactionId: transactionId,

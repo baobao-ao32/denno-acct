@@ -250,11 +250,19 @@ async function checkDuplicateReceipt(entry) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.exists) return;
     entry.appendToTransactionId = data.transactionId;
+    entry.duplicate = data;
     entry.card.dataset.registeredAmount = String(data.registeredAmount || 0);
     const notice = $(".dup-notice", entry.card);
     notice.hidden = false;
-    notice.textContent =
-      `この領収書は登録済みです（取引ID: ${data.transactionId}）。送信すると、用途がこの取引に追加されます。`;
+    if (data.receiptTotal > 0 && (data.registeredAmount || 0) >= data.receiptTotal) {
+      // 登録が完了している領収書は、追記も再登録もできない
+      entry.completed = true;
+      notice.textContent =
+        `この領収書は既に登録が完了しています（取引ID: ${data.transactionId}）。この領収書では送信できません。`;
+    } else {
+      notice.textContent =
+        `この領収書は登録済みです（取引ID: ${data.transactionId}）。送信すると、用途がこの取引に追加されます。`;
+    }
     // 既存取引の購入日・総額を引き継ぐ（ズレると別取引になってしまうため）
     if (data.purchaseDate && !$(".r-date", entry.card).value) {
       $(".r-date", entry.card).value = data.purchaseDate;
@@ -328,6 +336,16 @@ function validateExpense() {
     if (receipts.length === 0) errors = ["領収書ファイルが選択されていません"];
     receipts.forEach((r, i) => {
       errors = errors.concat(validateReceiptCard(r.card, `領収書${i + 1}（${r.file.name}）`));
+      if (r.completed) {
+        errors.push(`領収書${i + 1}（${r.file.name}）: 既に登録が完了しているため送信できません`);
+      } else if (r.duplicate) {
+        const total = Number($(".r-total", r.card).value || 0);
+        if (total > 0 && total !== r.duplicate.receiptTotal) {
+          errors.push(
+            `領収書${i + 1}（${r.file.name}）: 領収書全体の金額が登録済みの金額` +
+            `（${Number(r.duplicate.receiptTotal).toLocaleString()}円）と一致しません`);
+        }
+      }
     });
   }
   $("#submit-expense").disabled = errors.length > 0;
@@ -346,12 +364,18 @@ function receiptPayload(card) {
 }
 
 $("#submit-expense").addEventListener("click", async () => {
+  const without0 = $('input[name="receipt-mode"]:checked').value === "without";
+  if (!without0) {
+    // 送信直前に重複照会を取り直す（ファイル選択後に登録状況が
+    // 変わっていると、古い照会結果では弾けないため）
+    await Promise.all(receipts.map((r) => checkDuplicateReceipt(r)));
+  }
   const errors = validateExpense();
   if (errors.length) {
     showMessage(errors.join("\n"), "error");
     return;
   }
-  const without = $('input[name="receipt-mode"]:checked').value === "without";
+  const without = without0;
   const payload = {
     clientRequestId: crypto.randomUUID(),
     kind: "expense",
