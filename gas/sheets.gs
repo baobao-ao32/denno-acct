@@ -22,6 +22,16 @@ function headerMap_(sheet) {
   return map;
 }
 
+/**
+ * 数式インジェクション対策: 先頭が = + - @ (やタブ/改行) の文字列は
+ * スプレッドシートや Excel で数式として評価され得るため、先頭に ' を付けて
+ * テキストとして書き込む。ユーザー入力の自由文をセルに書く前に通すこと。
+ */
+function sanitizeCellText_(v) {
+  if (typeof v !== "string") return v;
+  return /^[=+\-@\t\r\n]/.test(v) ? "'" + v : v;
+}
+
 function appendRowsByHeader_(sheet, rows) {
   const map = headerMap_(sheet);
   const width = sheet.getLastColumn();

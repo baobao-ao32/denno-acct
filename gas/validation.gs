@@ -64,6 +64,15 @@ function validatePayload_(p) {
         }
       } else if (!r.file || !r.file.sha256 || !r.file.base64) {
         return "receipt file is required";
+      } else {
+        if (["image/jpeg", "image/png", "application/pdf"].indexOf(r.file.mimeType) < 0) {
+          return "unsupported file type";
+        }
+        if (!r.file.name || /[\/\\]/.test(r.file.name) || r.file.name.indexOf("..") >= 0) {
+          return "invalid file name";
+        }
+        // Base64 の長さで概算し、約10MBを超えるファイルは弾く
+        if (r.file.base64.length > 14000000) return "file too large";
       }
     }
     return null;

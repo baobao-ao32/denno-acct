@@ -19,32 +19,42 @@ function doGet() {
 }
 
 function doPost(e) {
+  const props = PropertiesService.getScriptProperties();
+  const token = props.getProperty("API_TOKEN");
+  // GAS の doPost は HTTP ヘッダを読めないため、トークンはボディで受け取る
+  let payload;
+  try {
+    payload = JSON.parse(e.postData.contents);
+  } catch (parseErr) {
+    return json_({ ok: false, error: "invalid JSON" }, 400);
+  }
+  if (!token || payload.token !== token) {
+    return json_({ ok: false, error: "unauthorized" }, 401);
+  }
+  const error = validatePayload_(payload);
+  if (error) return json_({ ok: false, error: error }, 400);
+
+  // 読み取り専用の照会はロックを取らない。フォームが複数領収書を並列に
+  // 照会しても、書き込み処理を塞いだりロック待ちで渋滞したりしないように。
+  try {
+    if (payload.action === "checkReceipt") {
+      return json_(checkReceipt_(payload, props));
+    }
+    if (payload.action === "status") {
+      return json_(status_(payload, props));
+    }
+  } catch (err) {
+    return json_({ ok: false, error: String(err && err.message || err) }, 500);
+  }
+
   const lock = LockService.getScriptLock();
   try {
     lock.waitLock(15000);
-    const props = PropertiesService.getScriptProperties();
-    const token = props.getProperty("API_TOKEN");
-    // GAS の doPost は HTTP ヘッダを読めないため、トークンはボディで受け取る
-    let payload;
-    try {
-      payload = JSON.parse(e.postData.contents);
-    } catch (parseErr) {
-      return json_({ ok: false, error: "invalid JSON" }, 400);
-    }
-    if (!token || payload.token !== token) {
-      return json_({ ok: false, error: "unauthorized" }, 401);
-    }
-    const error = validatePayload_(payload);
-    if (error) return json_({ ok: false, error: error }, 400);
-
     if (payload.kind === "income") {
       return json_(registerIncome_(payload, props));
     }
     if (payload.kind === "expense") {
       return json_(registerExpense_(payload, props));
-    }
-    if (payload.action === "checkReceipt") {
-      return json_(checkReceipt_(payload, props));
     }
     if (payload.action === "void") {
       return json_(voidTransaction_(payload, props));
@@ -54,9 +64,6 @@ function doPost(e) {
     }
     if (payload.action === "toggleSettled") {
       return json_(toggleSettled_(payload, props));
-    }
-    if (payload.action === "status") {
-      return json_(status_(payload, props));
     }
     return json_({ ok: false, error: "unknown request" }, 400);
   } catch (err) {

@@ -52,7 +52,7 @@ function applyVoid_(ss, fy, transactionId, reason, props) {
   const map = headerMap_(ledger);
   rows.forEach((r) => {
     ledger.getRange(r._row, map["取消フラグ"], 1, 1).setValue("TRUE");
-    ledger.getRange(r._row, map["取消理由"], 1, 1).setValue(reason || "");
+    ledger.getRange(r._row, map["取消理由"], 1, 1).setValue(sanitizeCellText_(reason || ""));
     ledger.getRange(r._row, map["取消日時"], 1, 1).setValue(now);
     if (newPath) ledger.getRange(r._row, map["領収書保存パス"], 1, 1).setValue(newPath);
   });

@@ -10,6 +10,11 @@ import { API_BASE } from "./config.js";
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
+// 領収書ファイルの制限 (サーバー側の検証と揃える)。WebP は報告書生成
+// (python-pptx) との互換性のため受け付けない (2026-11-26 決定)。
+const ALLOWED_FILE_TYPES = ["image/jpeg", "image/png", "application/pdf"];
+const MAX_FILE_BYTES = 10 * 1024 * 1024;
+
 // ---------- 共通ユーティリティ ----------
 
 async function sha256Hex(blob) {
@@ -208,13 +213,24 @@ $("#receipt-files").addEventListener("change", async (ev) => {
   }
   for (let file of files) {
     try {
+      // ハッシュは変換前の元ファイルで取る。HEIC→JPEG変換結果は端末や
+      // ブラウザでバイナリが微妙に変わるため、変換後のハッシュでは
+      // 別端末からの分割提出 (追記) で同一領収書と判定できなくなる。
+      const hash = await sha256Hex(file);
+      if (receipts.some((r) => r.hash === hash)) {
+        showMessage(`${file.name} は既に選択されています（同じ領収書ファイルです）。`, "error");
+        continue;
+      }
       if (isHeic(file)) {
         showMessage(`${file.name} をJPEGに変換しています…`);
         file = await convertHeicToJpeg(file);
       }
-      const hash = await sha256Hex(file);
-      if (receipts.some((r) => r.hash === hash)) {
-        showMessage(`${file.name} は既に選択されています（同じ領収書ファイルです）。`, "error");
+      if (!ALLOWED_FILE_TYPES.includes(file.type)) {
+        showMessage(`${file.name} は対応していない形式です（JPEG / PNG / PDF のみ）。`, "error");
+        continue;
+      }
+      if (file.size > MAX_FILE_BYTES) {
+        showMessage(`${file.name} が大きすぎます（1ファイル10MBまで）。`, "error");
         continue;
       }
       const card = document.createElement("div");
@@ -404,6 +420,11 @@ function receiptPayload(card) {
 }
 
 $("#submit-expense").addEventListener("click", async () => {
+  const btn = $("#submit-expense");
+  // 照会の完了を待つ間に連打されると二重送信になるため、最初に無効化する
+  if (btn.disabled) return;
+  btn.disabled = true;
+  btn.classList.add("loading");
   const without0 = $('input[name="receipt-mode"]:checked').value === "without";
   if (!without0) {
     // 送信直前に重複照会を取り直す（ファイル選択後に登録状況が
@@ -413,9 +434,10 @@ $("#submit-expense").addEventListener("click", async () => {
   const errors = validateExpense();
   if (errors.length) {
     showMessage(errors.join("\n"), "error");
+    btn.disabled = false;
+    btn.classList.remove("loading");
     return;
   }
-  const btn = $("#submit-expense");
   if (without0) {
     const payload = {
       clientRequestId: crypto.randomUUID(),

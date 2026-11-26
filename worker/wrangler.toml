@@ -1,11 +1,6 @@
+# 廃止 (2026-11-26): 独立 Worker は Pages Functions (form/functions/api/[[path]].js)
+# へ移行したため、この Worker はデプロイしない。経緯は worker.js の冒頭参照。
+# GAS_ENDPOINT / API_TOKEN は Pages プロジェクトの環境変数として設定する。
 name = "denno-acct-api"
 main = "worker.js"
 compatibility_date = "2026-01-01"
-
-# 本番では Pages のドメインに /api/* ルートとして割り当てる想定。
-# routes = [{ pattern = "acct.example.jp/api/*", zone_name = "example.jp" }]
-
-# Secret は wrangler secret put で設定する（このファイルには書かない）:
-#   wrangler secret put API_TOKEN
-# 変数:
-#   GAS_ENDPOINT = GAS Web App の URL（vars に置くか Secret にする）

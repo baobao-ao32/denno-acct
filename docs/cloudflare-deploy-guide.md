@@ -1,11 +1,13 @@
 # Cloudflare デプロイ手順書（denno-acct v2）
 
-フォーム（Pages）→ Worker（BFF）→ GAS（台帳）をつなげて、提出が台帳に届くところまで持っていく手順。
+フォーム（Pages）→ Pages Functions（BFF）→ GAS（台帳）をつなげて、提出が台帳に届くところまで持っていく手順。
 リポジトリ: `baobao-ao32/denno-acct`、作業コピー: `~/workspace/denno-acct-repo`
+
+API はフォームと同じ Pages プロジェクト内の Functions（`form/functions/api/[[path]].js`）で動かす。同一オリジンになるため、Pages にかける Cloudflare Access で `/api/*` もまとめて保護できる。独立 Worker（workers.dev）を公開する旧構成は、Access を迂回できてしまうため 2026-11-26 に廃止した。
 
 ## 前提
 
-- アカウントは Cloudflare の無料プランで足りる（Pages の静的配信は無制限、Worker は 1 日 10 万リクエスト・1 回 CPU 10ms・メモリ 128MB）。
+- アカウントは Cloudflare の無料プランで足りる（Pages の静的配信は無制限、Functions は Workers 無料枠と共通で 1 日 10 万リクエスト・1 回 CPU 10ms・メモリ 128MB）。
 - Node.js と wrangler が要る。clasp 用に Node が入っているなら `npx wrangler` で使える。
 - GAS 側は先に最新コードを `clasp push` しておくこと（コミット `6f9c1bb` 以降）。
 
@@ -25,56 +27,47 @@
    - 実行ユーザー: 自分
    - アクセスできるユーザー: 全員（認証はトークンで行うため）
    - デプロイして出てきた URL（`https://script.google.com/macros/s/.../exec`）を控える。これが `GAS_ENDPOINT`
+   - 再デプロイするときは、既存のデプロイを「編集」して新しいバージョンにすれば URL は変わらない。新しいデプロイを作ると URL が変わるので、その場合は Pages の環境変数 `GAS_ENDPOINT` も新しい URL に更新すること
 
-## Step 3: Worker をデプロイする
+## Step 3: API（Pages Functions）に接続情報を設定する
 
-```bash
-cd worker
-npx wrangler login          # ブラウザで Cloudflare にログインして許可する
-npx wrangler deploy         # https://denno-acct-api.<サブドメイン>.workers.dev が発行される
-npx wrangler secret put API_TOKEN     # Step 2 と同じ値を入れる
-npx wrangler secret put GAS_ENDPOINT  # Step 2 で控えた Web アプリ URL
-```
-
-確認: `https://denno-acct-api.<サブドメイン>.workers.dev/api/health` を開いて
-`{"ok":true,"gasConnected":true}` が返れば、Worker と GAS の接続設定は済んでいる。
-
-## Step 4: フォームを Pages にデプロイする
+API 本体は Step 4 の Pages デプロイで一緒に上がる。先に接続情報を Pages プロジェクトの環境変数へ入れておく。
 
 ```bash
-npx wrangler pages deploy ../form --project-name denno-acct
+# リポジトリのルート (denno-acct-repo/) で実行する
+npx wrangler pages secret put API_TOKEN --project-name denno-acct     # Step 2 と同じ値を入れる
+npx wrangler pages secret put GAS_ENDPOINT --project-name denno-acct  # Step 2 で控えた Web アプリ URL
 ```
 
-`https://denno-acct.pages.dev` でフォームが開ければ OK。ただしこの時点では `/api/*` が繋がっていないので、提出はモック応答のままだ。
+（ダッシュボードの Pages プロジェクト → Settings → Environment variables から入れても同じ。）
 
-## Step 5: `/api/*` を繋げる（ここが関門）
+確認は Step 4 のあと: `https://denno-acct.pages.dev/api/health` を開いて
+`{"ok":true,"gasConnected":true}` が返れば、Functions と GAS の接続設定は済んでいる。
 
-フォームは `/api/submit` のような相対パスで呼ぶ設計で、Worker には CORS 対応がまだ無い。
-そのため、フォームと Worker は**同じオリジン**で動かす必要がある。方法は 2 つ。
+## URL の行き先（取り違え注意）
 
-### 方法 A: 独自ドメイン + ルート割当（設計どおり）
+| 設定 | 入れる値 | 場所 |
+| --- | --- | --- |
+| `API_BASE` | 常に `""`（同一オリジンの相対パス） | `form/config.js` の定数（書き換え不要） |
+| `GAS_ENDPOINT` | GAS Web アプリの URL（`https://script.google.com/macros/s/.../exec`） | Pages プロジェクトの環境変数（Secret） |
+| `API_TOKEN` | Step 2 で決めた共有トークン（両側で同じ値） | GAS のスクリプト プロパティと Pages の環境変数（Secret） |
 
-**決定 (2026-11-25): 方法 B を採用する。** 当初は方法 A を選んだが、ドメイン費用を避けるため同日中に方法 B へ変更した。Worker には CORS 対応を追加済み、フォーム側は `form/app.js` の `API_BASE` に Worker の workers.dev URL を入れる。
+`API_BASE` に GAS の URL を入れると、フォームがブラウザから GAS を直接叩くことになり、CORS で弾かれて「APIに接続できませんでした」になる（2026-11-25 に実際に起きた）。GAS の URL が入るのは `GAS_ENDPOINT` だけ。
 
-サークル用のドメインが Cloudflare の DNS にある場合に使う。
+## Step 4: フォームと API を Pages にデプロイする
 
-1. Pages プロジェクトにカスタムドメインを設定する
-2. `worker/wrangler.toml` のコメントアウトされている routes を有効化する
+リポジトリのルート（`denno-acct-repo/`）から実行する。
 
-```toml
-routes = [{ pattern = "acct.example.jp/api/*", zone_name = "example.jp" }]
+```bash
+npx wrangler pages deploy form --project-name denno-acct
 ```
 
-3. `cd worker && npx wrangler deploy` で再デプロイ
+`form/` の中身がそのままサイトになり、`form/functions/` の Functions も同時にデプロイされる。
+`https://denno-acct.pages.dev` でフォームが開け、`https://denno-acct.pages.dev/api/health` が返れば OK。
 
-### 方法 B: ドメイン無しで workers.dev を直接呼ぶ
+## Step 5: `/api/*` の接続
 
-ドメインが無い場合の現実的な方法。Worker 側に CORS 対応を足し、フォーム側の呼び先を変える。
-
-1. `worker/worker.js` に CORS を追加する（`json()` のヘッダに `Access-Control-Allow-Origin` を足し、`OPTIONS` リクエストに 204 を返す）
-2. `form/app.js` の `fetch("/api/receipts/check", ...)` と `fetch("/api/submit", ...)` を
-   `fetch("https://denno-acct-api.<サブドメイン>.workers.dev/api/...", ...)` に書き換える
-3. 両方を再デプロイする
+同一オリジン構成では追加の紐付けは要らない。フォームからの `fetch("/api/...")` がそのまま Functions に届く。旧構成（方法 A / 方法 B）の手順は廃止した。
 
 ## Step 6: 通しテスト
 
@@ -85,13 +78,14 @@ routes = [{ pattern = "acct.example.jp/api/*", zone_name = "example.jp" }]
 
 ## つまずきやすいところ
 
-- **401 が返る**: GAS の `API_TOKEN` と Worker の Secret が食い違っている。両方を同じ値にし直す
-- **`/api/*` が 404**: Step 5 の紐付けができていない。Pages と Worker が別オリジンのまま
-- **ブラウザのコンソールに CORS エラー**: 方法 B を選んだのに Worker の CORS 追加が漏れている
-- **提出しても台帳に何も増えない**: GAS の 302 リダイレクトで POST が消えている可能性がある。`forwardToGas` の fetch がリダイレクト先へ正しく再送できているか確認する。症状が出たらここを直す
-- **Error 1102**: Worker の CPU 10ms 超え。領収書が大きい場合に疑う（通常の提出では起きないはず）
+- **「APIに接続できませんでした」が出る**: `form/config.js` の `API_BASE` が `""` になっていない（GAS の `/exec` URL などが入っている）。`""` に直して Pages を再デプロイする（上の「URL の行き先」を参照）
+- **401 が返る**: GAS の `API_TOKEN` と Pages の環境変数が食い違っている。両方を同じ値にし直す
+- **`/api/*` が 404**: Functions がデプロイされていない。`form/functions/` を含んだ状態で Pages を再デプロイする（デプロイ元が `form/` であること）
+- **提出しても台帳に何も増えない**: GAS の 302 リダイレクトで POST が消えている可能性がある。Functions の `forwardToGas` の fetch がリダイレクト先へ正しく再送できているか確認する。症状が出たらここを直す
+- **Error 1102**: Functions の CPU 10ms 超え。領収書が大きい場合に疑う（通常の提出では起きないはず）
 
 ## 本番切替の直前にやること
 
-- Cloudflare Access（Google ログイン）を有効化して、フォームへのアクセスをサークル関係者に絞る（テスト期間は共有リンクのまま）
+- Cloudflare Access（Google ログイン）を Pages プロジェクトに有効化して、アクセスをサークル関係者に絞る（テスト期間は共有リンクのまま）。同一オリジン構成なので `/api/*` も自動で Access の対象になる。管理ページ（admin.html）はパス別ポリシーで会計・役員のみに絞る
+- 旧 Worker（denno-acct-api）はもう使わないので、Cloudflare 側で削除しておく（公開エンドポイントを残さないため）
 - テスト提出した行を台帳から void にして掃除する

@@ -43,7 +43,7 @@ function findReceiptByHashAllYears_(props, sha256) {
     const ledger = ss.getSheetByName("取引明細");
     if (!ledger) continue;
     const found = findTransactionByHash_(ledger, sha256);
-    if (found) return { fy: parseInt(m[1], 10), row: found };
+    if (found) return { fy: parseInt(m[1], 10), row: found, ss: ss };
   }
   return null;
 }
@@ -60,11 +60,8 @@ function checkReceipt_(p, props) {
   const found = findReceiptByHashAllYears_(props, p.sha256);
   if (!found) return { ok: true, exists: false };
   const r = found.row;
-  const root = DriveApp.getFolderById(props.getProperty("ROOT_FOLDER_ID"));
-  const yearFolder = findChildFolder_(root, fiscalYearLabel_(found.fy));
-  const ssFile = findChildFile_(yearFolder, fiscalYearLabel_(found.fy) + "会計記録");
-  const ss = SpreadsheetApp.openById(ssFile.getId());
-  const registeredAmount = sumTransactionUses_(ss.getSheetByName("取引明細"), r["取引ID"]);
+  // 探索時に開いた ss をそのまま使う (同じスプレッドシートの二重オープンを避ける)
+  const registeredAmount = sumTransactionUses_(found.ss.getSheetByName("取引明細"), r["取引ID"]);
   return {
     ok: true,
     exists: true,
