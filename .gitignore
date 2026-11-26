@@ -4,3 +4,9 @@
 
 # wrangler のローカル作業ディレクトリ
 .wrangler/
+
+# 報告書生成器の生成物・作業ファイル
+report-generator/out/
+report-generator/__pycache__/
+report-generator/.venv/
+report-generator/test-fixture/
