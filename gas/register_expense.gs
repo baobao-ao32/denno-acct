@@ -48,79 +48,84 @@ function registerExpense_(p, props) {
 }
 
 function registerOneReceipt_(receipt, p, props) {
-  const fy = fiscalYearOf_(receipt.purchaseDate);
-  const env = ensureFiscalEnv_(fy, props);
-  const ss = env.ss;
-  const ledger = ss.getSheetByName("取引明細");
   const now = new Date();
 
   // 値引き・ポイント利用額: 用途はレシート表記 (値引き前) の金額で受け取り、
   // ここで按分して実支払額ベースの用途金額に直す。以後の照合はすべて按分後で行う。
+  // 按分では各用途に1円以上残すため、値引きの上限は 合計 - 用途数。
   const discount = receipt.discount == null ? 0 : Number(receipt.discount);
   const grossSum = receipt.uses.reduce((a, u) => a + u.amount, 0);
-  if (!Number.isInteger(discount) || discount < 0 || (discount > 0 && discount >= grossSum)) {
-    throw new Error("値引き・ポイント利用額が不正です（用途の合計金額より小さい必要があります）");
+  if (!Number.isInteger(discount) || discount < 0 || discount > grossSum - receipt.uses.length) {
+    throw new Error("値引き・ポイント利用額が不正です（各用途に1円以上残る範囲で入力してください）");
   }
   const netUses = applyDiscount_(receipt.uses, discount);
   const netSum = netUses.reduce((a, u) => a + u.amount, 0);
 
-  // 既存領収書への用途追記 (ファイルのハッシュで照合)
+  // 既存取引の探索は年度環境の生成より前に行う。購入日の年度を打ち間違えた
+  // 追記で、使われない年度フォルダ/スプレッドシートが先に生成されるのを防ぐ。
+  let existing = null;
+  let existingFy = null;
   if (!receipt.proofImpossible && receipt.file && receipt.file.sha256) {
-    let appendEnv = env;
-    let appendSs = ss;
-    let appendFy = fy;
-    let existing = findTransactionByHash_(ledger, receipt.file.sha256);
-    if (!existing) {
-      // 購入日の入力ミス等で年度がズレていても重複登録しないよう、全年度から探す
-      const found = findReceiptByHashAllYears_(props, receipt.file.sha256);
-      if (found) {
-        appendEnv = ensureFiscalEnv_(found.fy, props);
-        appendSs = appendEnv.ss;
-        appendFy = found.fy;
-        existing = findTransactionByHash_(appendSs.getSheetByName("取引明細"), receipt.file.sha256);
-      }
+    const found = findReceiptByHashAllYears_(props, receipt.file.sha256);
+    if (found) existingFy = found.fy;
+  }
+  const fy = existingFy != null ? existingFy : fiscalYearOf_(receipt.purchaseDate);
+  const env = ensureFiscalEnv_(fy, props);
+  const ss = env.ss;
+  const ledger = ss.getSheetByName("取引明細");
+  if (existingFy != null) {
+    existing = findTransactionByHash_(ledger, receipt.file.sha256);
+  }
+
+  // 既存領収書への用途追記 (ファイルのハッシュで照合)
+  if (existing) {
+    const transactionId = existing["取引ID"];
+    const storedTotal = Number(existing["領収書全体の金額"] || 0);
+    const existingSum = sumTransactionUses_(ledger, transactionId);
+    // 値引きの二重控除を防ぐ: 値引きは最初の提出でのみ受け付ける
+    const txRows = readAllRows_(ledger).filter((r) => r["取引ID"] === transactionId && !r["取消フラグ"]);
+    const existingDiscount = Math.max.apply(null, txRows.map((r) => Number(r["値引き額"] || 0)).concat([0]));
+    if (discount > 0 && existingDiscount > 0) {
+      throw new Error("この領収書には既に値引き・ポイント利用額（" + existingDiscount.toLocaleString() + "円）が登録されています。追記時の値引き額は0にしてください");
     }
-    if (existing) {
-      const transactionId = existing["取引ID"];
-      const storedTotal = Number(existing["領収書全体の金額"] || 0);
-      const existingSum = sumTransactionUses_(appendSs.getSheetByName("取引明細"), transactionId);
-      if (storedTotal > 0 && receipt.receiptTotal !== storedTotal) {
-        throw new Error("領収書全体の金額が、登録済みの金額（" + storedTotal.toLocaleString() + "円）と一致しません");
-      }
-      if (storedTotal > 0 && existingSum >= storedTotal) {
-        throw new Error("この領収書は既に登録が完了しています（取引ID: " + transactionId + "）。追加の用途は登録できません");
-      }
-      // 途中提出を許可するため、追記は「登録済み + 今回分 <= 総額」なら通す
-      if (existingSum + netSum > receipt.receiptTotal) {
-        throw new Error("用途の金額が領収書全体の金額を超えています: 登録済み " + existingSum.toLocaleString() + "円 + 今回（値引き後） " + netSum.toLocaleString() + "円 > 領収書全体 " + receipt.receiptTotal.toLocaleString() + "円");
-      }
-      const rows = netUses.map((u, i) => buildLedgerRow_({
-        transactionId: transactionId,
-        detailIndex: existing._maxDetailIndex + i + 1,
-        kind: "expense",
-        clientRequestId: p.clientRequestId,
-        purchaseDate: existing["購入日"] || receipt.purchaseDate,
-        submittedAt: p.submittedAt,
-        now: now,
-        buyerName: receipt.buyerName,
-        vendor: receipt.vendor,
-        paymentMethodId: receipt.paymentMethodId,
-        use: u,
-        receiptTotal: receipt.receiptTotal,
-        receiptUrl: existing["領収書URL"],
-        receiptPath: existing["領収書保存パス"],
-        receiptCategory: existing["領収書保存カテゴリ"],
-        sha256: receipt.file.sha256,
-        proofImpossible: false,
-        proofImpossibleReason: "",
-        discount: discount,
-      }));
-      appendRowsByHeader_(appendSs.getSheetByName("取引明細"), rows);
-      appendLog_(appendSs.getSheetByName("APIログ"), p.clientRequestId, "expense", transactionId, "ok-appended");
-      moveReceiptFileIfNeeded_(appendEnv, existing, netUses, props);
-      recompute_(appendSs, appendFy, props);
-      return { transactionId: transactionId, appended: true };
+    if (storedTotal > 0 && receipt.receiptTotal !== storedTotal) {
+      throw new Error("領収書全体の金額が、登録済みの金額（" + storedTotal.toLocaleString() + "円）と一致しません");
     }
+    if (storedTotal > 0 && existingSum >= storedTotal) {
+      throw new Error("この領収書は既に登録が完了しています（取引ID: " + transactionId + "）。追加の用途は登録できません");
+    }
+    // 途中提出を許可するため、追記は「登録済み + 今回分 <= 総額」なら通す
+    if (existingSum + netSum > receipt.receiptTotal) {
+      throw new Error("用途の金額が領収書全体の金額を超えています: 登録済み " + existingSum.toLocaleString() + "円 + 今回（値引き後） " + netSum.toLocaleString() + "円 > 領収書全体 " + receipt.receiptTotal.toLocaleString() + "円");
+    }
+    const rows = netUses.map((u, i) => buildLedgerRow_({
+      transactionId: transactionId,
+      detailIndex: existing._maxDetailIndex + i + 1,
+      kind: "expense",
+      clientRequestId: p.clientRequestId,
+      purchaseDate: existing["購入日"] || receipt.purchaseDate,
+      submittedAt: p.submittedAt,
+      now: now,
+      // 購入者・購入先・支払方法は最初の登録を正とし、追記側の入力では上書きしない
+      // (支払方法が混在すると同一取引内で精算状態が割れるため)
+      buyerName: existing["購入者氏名"],
+      vendor: existing["購入先"],
+      paymentMethodId: existing["支払方法ID"],
+      use: u,
+      receiptTotal: receipt.receiptTotal,
+      receiptUrl: existing["領収書URL"],
+      receiptPath: existing["領収書保存パス"],
+      receiptCategory: existing["領収書保存カテゴリ"],
+      sha256: receipt.file.sha256,
+      proofImpossible: false,
+      proofImpossibleReason: "",
+      discount: discount,
+    }));
+    appendRowsByHeader_(ledger, rows);
+    appendLog_(ss.getSheetByName("APIログ"), p.clientRequestId, "expense", transactionId, "ok-appended");
+    moveReceiptFileIfNeeded_(env, existing, netUses, props);
+    recompute_(ss, fy, props);
+    return { transactionId: transactionId, appended: true };
   }
 
   // 新規取引。途中提出 (合計が総額未満) を許可する。ただし領収書なし

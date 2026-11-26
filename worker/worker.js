@@ -30,11 +30,18 @@ function validateUse(u) {
   return (
     u &&
     isNonEmptyString(u.name) &&
-    Number.isFinite(u.amount) && u.amount > 0 &&
+    Number.isInteger(u.amount) && u.amount > 0 &&
     isNonEmptyString(u.categoryId) &&
     isNonEmptyString(u.subjectId) &&
     isNonEmptyString(u.itemName)
   );
+}
+
+function isValidDateString(v) {
+  if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const [y, m, d] = v.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
 }
 
 function validatePayload(p) {
@@ -42,7 +49,7 @@ function validatePayload(p) {
   if (!isNonEmptyString(p.clientRequestId)) return "clientRequestId is required";
   if (p.kind === "income") {
     if (!isNonEmptyString(p.subjectId)) return "subjectId is required";
-    if (!Number.isFinite(p.amount) || p.amount <= 0) return "amount must be positive";
+    if (!Number.isInteger(p.amount) || p.amount <= 0) return "amount must be a positive integer";
     if (p.subjectId === "other_income" && !isNonEmptyString(p.detail)) {
       return "detail is required for other_income";
     }
@@ -52,16 +59,18 @@ function validatePayload(p) {
     if (!Array.isArray(p.receipts) || p.receipts.length === 0) return "receipts is required";
     if (p.receipts.length > MAX_RECEIPTS) return `too many receipts (max ${MAX_RECEIPTS})`;
     for (const r of p.receipts) {
-      if (!isNonEmptyString(r.purchaseDate)) return "purchaseDate is required";
+      if (!isValidDateString(r.purchaseDate)) return "purchaseDate must be a valid YYYY-MM-DD date";
       if (!isNonEmptyString(r.buyerName)) return "buyerName is required";
+      if (!isNonEmptyString(r.vendor)) return "vendor is required";
       if (!isNonEmptyString(r.paymentMethodId)) return "paymentMethodId is required";
-      if (!Number.isFinite(r.receiptTotal) || r.receiptTotal <= 0) return "receiptTotal must be positive";
+      if (!Number.isInteger(r.receiptTotal) || r.receiptTotal <= 0) return "receiptTotal must be a positive integer";
       if (!Array.isArray(r.uses) || r.uses.length === 0) return "uses is required";
       if (r.uses.length > MAX_USES) return `too many uses (max ${MAX_USES})`;
       if (!r.uses.every(validateUse)) return "invalid use entry";
       const sum = r.uses.reduce((a, u) => a + u.amount, 0);
       const discount = r.discount == null ? 0 : r.discount;
-      if (!Number.isInteger(discount) || discount < 0 || (discount > 0 && discount >= sum)) {
+      // 按分で各用途に1円以上残すため、値引きの上限は 合計 - 用途数
+      if (!Number.isInteger(discount) || discount < 0 || discount > sum - r.uses.length) {
         return "invalid discount";
       }
       // 完全一致は GAS が取引単位で検証する (分割提出の追記があるため、ここでは超過のみ弾く)

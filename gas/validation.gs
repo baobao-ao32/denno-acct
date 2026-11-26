@@ -14,12 +14,19 @@
  * - 複数カテゴリに跨る領収書は、金額割合が最大のカテゴリに帰属させる
  */
 
+function isValidDateString_(v) {
+  if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const parts = v.split("-").map(Number);
+  const d = new Date(parts[0], parts[1] - 1, parts[2]);
+  return d.getFullYear() === parts[0] && d.getMonth() === parts[1] - 1 && d.getDate() === parts[2];
+}
+
 function validatePayload_(p) {
   if (!p || typeof p !== "object") return "payload is not an object";
   if (typeof p.clientRequestId !== "string" || !p.clientRequestId) return "clientRequestId is required";
   if (p.kind === "income") {
     if (!INCOME_SUBJECTS[p.subjectId]) return "unknown income subjectId";
-    if (!isFinite(p.amount) || p.amount <= 0) return "amount must be positive";
+    if (!Number.isInteger(p.amount) || p.amount <= 0) return "amount must be a positive integer";
     if (p.subjectId === "other_income" && !(typeof p.detail === "string" && p.detail.trim())) {
       return "detail is required for other_income";
     }
@@ -29,10 +36,11 @@ function validatePayload_(p) {
     if (!Array.isArray(p.receipts) || p.receipts.length === 0) return "receipts is required";
     if (p.receipts.length > MAX_RECEIPTS) return "too many receipts";
     for (const r of p.receipts) {
-      if (!r.purchaseDate) return "purchaseDate is required";
+      if (!isValidDateString_(r.purchaseDate)) return "purchaseDate must be a valid YYYY-MM-DD date";
       if (!r.buyerName) return "buyerName is required";
+      if (!r.vendor) return "vendor is required";
       if (!PAYMENT_METHODS[r.paymentMethodId]) return "unknown paymentMethodId";
-      if (!isFinite(r.receiptTotal) || r.receiptTotal <= 0) return "receiptTotal must be positive";
+      if (!Number.isInteger(r.receiptTotal) || r.receiptTotal <= 0) return "receiptTotal must be a positive integer";
       if (!Array.isArray(r.uses) || r.uses.length === 0) return "uses is required";
       if (r.uses.length > MAX_USES) return "too many uses";
       let sum = 0;
@@ -40,11 +48,12 @@ function validatePayload_(p) {
         if (!u.name || !CATEGORIES[u.categoryId] || !EXPENSE_SUBJECTS[u.subjectId] || !u.itemName) {
           return "invalid use entry";
         }
-        if (!isFinite(u.amount) || u.amount <= 0) return "use amount must be positive";
+        if (!Number.isInteger(u.amount) || u.amount <= 0) return "use amount must be a positive integer";
         sum += u.amount;
       }
       const discount = r.discount == null ? 0 : Number(r.discount);
-      if (!Number.isInteger(discount) || discount < 0 || (discount > 0 && discount >= sum)) {
+      // 按分で各用途に1円以上残すため、値引きの上限は 合計 - 用途数
+      if (!Number.isInteger(discount) || discount < 0 || discount > sum - r.uses.length) {
         return "invalid discount";
       }
       // 合計の完全一致は登録時に取引単位で検証する (分割提出の追記があるため、ここでは超過のみ弾く)

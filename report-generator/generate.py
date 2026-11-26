@@ -76,7 +76,8 @@ def aggregate(data):
     for tx in data.TRANSACTIONS:
         total = sum(line["amount"] for line in tx["lines"])
         for line in tx["lines"]:
-            key = (line["category_id"], line["subject"])
+            # 集計キーは報告科目ID（サンプルデータ等、IDが無い場合は表示名で代用）
+            key = (line["category_id"], line.get("subject_id") or line["subject"])
             row = expenses.setdefault(key, {"amount": 0})
             row["amount"] += line["amount"]
         if not tx.get("receipt"):
@@ -91,7 +92,7 @@ def aggregate(data):
                 "date": tx["date"],
                 "counterparty": tx["counterparty"],
                 "category_id": rep_id,
-                "subject": primary["subject"],
+                "subject": expense_subject_name(primary.get("subject_id"), primary["subject"]),
                 "amount": total,
                 "lines": tx["lines"],
                 "image_paths": tx.get("image_paths"),
@@ -178,7 +179,7 @@ def generate_xlsx(data, agg):
         if cat_id != last_cat:
             ws.cell(row=r, column=3, value=CATEGORY_REPORT_NAME[cat_id])
             last_cat = cat_id
-        ws.cell(row=r, column=5, value=subject)
+        ws.cell(row=r, column=5, value=expense_subject_name(subject, subject))
         ws.cell(row=r, column=8, value=row["amount"])
 
     # サマリ: H6 収入合計はテンプレに数式が無いベタ値のため値を書き込む
@@ -400,6 +401,34 @@ INCOME_SUBJECT_IDS = {
 }
 SUMMARY_UNPROVABLE_KEY = "領収証等による支出の証明ができない額"
 
+# GAS EXPENSE_SUBJECTS (config.gs) の写し: 報告科目ID -> 表示名。
+# 集計は報告科目ID基準で行い、表示名はここから引く。スプレッドシート上の
+# 報告科目名だけが手で書き換えられても、GAS の集計と食い違わないようにするため。
+EXPENSE_SUBJECT_NAMES = {
+    "consumables": "消耗品費",
+    "supplies": "用品費",
+    "materials": "材料費",
+    "printing": "印刷製本費",
+    "books": "図書資料費",
+    "communication": "通信費",
+    "rent": "賃借料",
+    "facility": "施設利用料",
+    "transport": "運搬費・配送料",
+    "registration": "参加費登録料",
+    "insurance": "保険料",
+    "storage": "保管料",
+    "medical": "医療費",
+    "fuel": "燃料費",
+    "lecturer": "講師料",
+    "outsourcing": "委託費",
+    "admission": "入館料",
+    "other": "その他",
+}
+
+
+def expense_subject_name(subject_id, fallback=""):
+    return EXPENSE_SUBJECT_NAMES.get(subject_id) or fallback or subject_id or ""
+
 
 def _norm_date(v):
     if v is None:
@@ -523,6 +552,7 @@ def load_fiscal_folder(folder):
             })
             tx["lines"].append({
                 "category_id": r.get("用途別カテゴリID") or "",
+                "subject_id": r.get("報告科目ID") or "",
                 "subject": r.get("報告科目名") or "",
                 "item": r.get("用途別品目名") or "",
                 "amount": _num(r.get("用途別金額合計")),
@@ -659,7 +689,7 @@ def load_fiscal_folder(folder):
             subject = row.get("科目")
             if subject and subject != "支出合計":
                 tab_groups[(last_cat, subject)] = _num(row.get("金額"))
-        mine_groups = {(CATEGORY_REPORT_NAME[cid], subject): row["amount"]
+        mine_groups = {(CATEGORY_REPORT_NAME[cid], expense_subject_name(subject, subject)): row["amount"]
                        for (cid, subject), row in agg["expenses"].items()}
         for key in set(tab_groups) | set(mine_groups):
             if tab_groups.get(key, 0) != mine_groups.get(key, 0):

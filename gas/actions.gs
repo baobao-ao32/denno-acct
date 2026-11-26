@@ -116,6 +116,9 @@ function toggleSettled_(p, props) {
     if (!ledger) continue;
     const rows = readAllRows_(ledger).filter((r) => r["取引ID"] === p.transactionId && !r["取消フラグ"]);
     if (rows.length === 0) continue;
+    if (rows[0]["種別"] !== "expense") {
+      return { ok: false, error: "収入の取引は精算状態を変更できません" };
+    }
     const current = rows[0]["精算状態"];
     if (current === "精算不要") {
       return { ok: false, error: "この取引は精算不要（直接支払い）のため変更できません" };

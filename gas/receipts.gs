@@ -78,6 +78,8 @@ function checkReceipt_(p, props) {
     receiptTotal: Number(r["領収書全体の金額"] || 0),
     registeredAmount: registeredAmount,
     buyerName: r["購入者氏名"],
+    vendor: r["購入先"],
+    paymentMethodId: r["支払方法ID"],
   };
 }
 

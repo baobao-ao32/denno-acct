@@ -167,8 +167,8 @@ function refreshCard(card) {
   const target = total - registered;
   const box = $(".sum-check", card);
   if (!box) return;
-  if (discount > 0 && sum > 0 && discount >= sum) {
-    box.textContent = "値引き・ポイント利用額は、用途の合計金額より小さくしてください。";
+  if (discount > 0 && sum > 0 && discount > sum - uses.length) {
+    box.textContent = "値引き・ポイント利用額が大きすぎます（各用途に1円以上残る範囲で入力してください）。";
     box.className = "sum-check ng";
   } else if (total > 0) {
     const diff = target - net;
@@ -213,6 +213,10 @@ $("#receipt-files").addEventListener("change", async (ev) => {
         file = await convertHeicToJpeg(file);
       }
       const hash = await sha256Hex(file);
+      if (receipts.some((r) => r.hash === hash)) {
+        showMessage(`${file.name} は既に選択されています（同じ領収書ファイルです）。`, "error");
+        continue;
+      }
       const card = document.createElement("div");
       card.className = "receipt-card";
       const preview = file.type.startsWith("image/")
@@ -221,6 +225,7 @@ $("#receipt-files").addEventListener("change", async (ev) => {
       card.innerHTML = `<h3></h3>${preview}${receiptFieldsHtml()}
         <p class="hash">SHA-256: ${hash}</p>
         <p class="dup-notice sum-check ok" hidden></p>
+        <p class="done-notice sum-check ok" hidden></p>
         <button type="button" class="sub danger remove-receipt">この領収書を取り消す</button>`;
       $("h3", card).textContent = file.name;
       if (file.type.startsWith("image/")) {
@@ -271,7 +276,8 @@ async function checkDuplicateReceipt(entry) {
         `この領収書は既に登録が完了しています（取引ID: ${data.transactionId}）。この領収書では送信できません。`;
     } else {
       notice.textContent =
-        `この領収書は登録済みです（取引ID: ${data.transactionId}）。送信すると、用途がこの取引に追加されます。`;
+        `この領収書は登録済みです（取引ID: ${data.transactionId}）。送信すると、用途がこの取引に追加されます。` +
+        `値引き・ポイント利用額は最初の提出でのみ入力してください（追記時は0）。`;
     }
     // 既存取引の購入日・総額を引き継ぐ（ズレると別取引になってしまうため）
     if (data.purchaseDate && !$(".r-date", entry.card).value) {
@@ -279,6 +285,17 @@ async function checkDuplicateReceipt(entry) {
     }
     if (data.receiptTotal && !$(".r-total", entry.card).value) {
       $(".r-total", entry.card).value = data.receiptTotal;
+    }
+    // 購入者・購入先・支払方法も既存取引から引き継ぐ（追記側で変えると
+    // 同一取引内で精算状態が混在するため、GAS側でも最初の登録を正とする）
+    if (data.buyerName && !$(".r-buyer", entry.card).value) {
+      $(".r-buyer", entry.card).value = data.buyerName;
+    }
+    if (data.vendor && !$(".r-vendor", entry.card).value) {
+      $(".r-vendor", entry.card).value = data.vendor;
+    }
+    if (data.paymentMethodId && !$(".r-payment", entry.card).value) {
+      $(".r-payment", entry.card).value = data.paymentMethodId;
     }
     refreshCard(entry.card);
   } catch {
@@ -332,8 +349,8 @@ function validateReceiptCard(card, label, requireExact) {
   const sum = uses.reduce((a, u) => a + u.amount, 0);
   const discountEl = $(".r-discount", card);
   const discount = discountEl ? Number(discountEl.value || 0) : 0;
-  if (discount < 0 || !Number.isInteger(discount) || (discount > 0 && sum > 0 && discount >= sum)) {
-    errors.push(`${label}: 値引き・ポイント利用額が不正です（用途の合計金額より小さくしてください）`);
+  if (discount < 0 || !Number.isInteger(discount) || (discount > 0 && sum > 0 && discount > sum - uses.length)) {
+    errors.push(`${label}: 値引き・ポイント利用額が不正です（各用途に1円以上残る範囲で入力してください）`);
   }
   const target = total - Number(card.dataset.registeredAmount || 0);
   if (total > 0 && requireExact && sum - discount !== target) {
@@ -356,6 +373,7 @@ function validateExpense() {
   } else {
     if (receipts.length === 0) errors = ["領収書ファイルが選択されていません"];
     receipts.forEach((r, i) => {
+      if (r.done) return; // 送信済みの領収書は再検証しない
       errors = errors.concat(validateReceiptCard(r.card, `領収書${i + 1}（${r.file.name}）`));
       if (r.completed) {
         errors.push(`領収書${i + 1}（${r.file.name}）: 既に登録が完了しているため送信できません`);
@@ -390,42 +408,99 @@ $("#submit-expense").addEventListener("click", async () => {
   if (!without0) {
     // 送信直前に重複照会を取り直す（ファイル選択後に登録状況が
     // 変わっていると、古い照会結果では弾けないため）
-    await Promise.all(receipts.map((r) => checkDuplicateReceipt(r)));
+    await Promise.all(receipts.filter((r) => !r.done).map((r) => checkDuplicateReceipt(r)));
   }
   const errors = validateExpense();
   if (errors.length) {
     showMessage(errors.join("\n"), "error");
     return;
   }
-  const without = without0;
-  const payload = {
-    clientRequestId: crypto.randomUUID(),
-    kind: "expense",
-    submittedAt: new Date().toISOString(),
-    receipts: [],
-  };
-  if (without) {
-    payload.receipts.push({
-      ...receiptPayload(noReceiptCard),
-      file: null,
-      proofImpossible: true,
-      proofImpossibleReason: $(".r-noreceipt-reason", noReceiptCard).value.trim(),
-    });
-  } else {
-    for (const r of receipts) {
-      payload.receipts.push({
-        ...receiptPayload(r.card),
-        file: {
-          name: r.file.name,
-          mimeType: r.file.type,
-          sha256: r.hash,
-          base64: await blobToBase64(r.file),
-        },
-        proofImpossible: false,
-      });
-    }
+  const btn = $("#submit-expense");
+  if (without0) {
+    const payload = {
+      clientRequestId: crypto.randomUUID(),
+      kind: "expense",
+      submittedAt: new Date().toISOString(),
+      receipts: [{
+        ...receiptPayload(noReceiptCard),
+        file: null,
+        proofImpossible: true,
+        proofImpossibleReason: $(".r-noreceipt-reason", noReceiptCard).value.trim(),
+      }],
+    };
+    await submitPayload(payload, btn);
+    return;
   }
-  await submitPayload(payload, $("#submit-expense"));
+  // 領収書は1件ずつ個別に送信する。途中で失敗しても成功分は「送信済み」として
+  // 残り、失敗分だけを直して再送信できる（まとめて送ると部分コミットが起き、
+  // 成功分の再送が「登録完了済み」で阻害されるため）。
+  btn.classList.add("loading");
+  btn.disabled = true;
+  const failed = [];
+  let sentCount = 0;
+  try {
+    for (const r of receipts) {
+      if (r.done) {
+        sentCount++;
+        continue;
+      }
+      const payload = {
+        clientRequestId: crypto.randomUUID(),
+        kind: "expense",
+        submittedAt: new Date().toISOString(),
+        receipts: [{
+          ...receiptPayload(r.card),
+          file: {
+            name: r.file.name,
+            mimeType: r.file.type,
+            sha256: r.hash,
+            base64: await blobToBase64(r.file),
+          },
+          proofImpossible: false,
+        }],
+      };
+      showPayload(payload);
+      try {
+        const res = await fetch(API_BASE + "/api/submit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.ok) {
+          r.done = true;
+          sentCount++;
+          const txid = data.receipts && data.receipts[0] ? data.receipts[0].transactionId : "";
+          const note = $(".done-notice", r.card);
+          if (note) {
+            note.hidden = false;
+            note.textContent = `送信済み${txid ? `（取引ID: ${txid}）` : ""}。この領収書は再送信されません。`;
+          }
+          $$("input, select, textarea, button", r.card).forEach((el) => { el.disabled = true; });
+        } else {
+          failed.push(`${r.file.name}: ${data.error || res.status}`);
+        }
+      } catch (e) {
+        failed.push(`${r.file.name}: APIに接続できませんでした`);
+      }
+    }
+  } finally {
+    btn.classList.remove("loading");
+    btn.disabled = false;
+  }
+  if (failed.length === 0) {
+    showMessage(`報告が完了しました（領収書 ${sentCount} 件）。`, "success");
+    resetForms();
+  } else if (sentCount > 0) {
+    showMessage(
+      "一部の領収書を送信できませんでした。送信済みの領収書はそのまま残っています。直して再送信してください。\n" +
+      failed.join("\n"),
+      "error"
+    );
+  } else {
+    showMessage("送信に失敗しました:\n" + failed.join("\n"), "error");
+  }
+  validateExpense();
 });
 
 // ---------- 収入 ----------
