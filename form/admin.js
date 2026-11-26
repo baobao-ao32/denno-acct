@@ -1,6 +1,5 @@
 // denno-acct v2 — 会計管理ページ (再計算・取消・精算状態の変更)
-// API_BASE は app.js と同じ値をデプロイ時に入れること。
-const API_BASE = "".replace(/\/+$/, ""); // 末尾の "/" は自動で取り除く（URLが "//api/..." になると Worker が 404 を返すため）
+import { API_BASE } from "./config.js";
 
 const $ = (s, r) => (r || document).querySelector(s);
 
