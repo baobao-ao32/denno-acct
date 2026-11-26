@@ -15,31 +15,49 @@
  */
 
 function voidTransaction_(p, props) {
-  // 取引が属する年度は、まず全年度を走査する代わりに「設定」から直近の年度を使う。
-  // 簡易実装: ルート直下の年度フォルダを全て走査して取引IDを探す。
+  // 取引が属する年度を探すため、ルート直下の年度フォルダを全て走査する。
   const root = DriveApp.getFolderById(props.getProperty("ROOT_FOLDER_ID"));
   const folders = root.getFolders();
   while (folders.hasNext()) {
     const f = folders.next();
+    const m = f.getName().match(/^(\d{4})年度$/);
+    if (!m) continue;
     const ssFile = findChildFile_(f, f.getName() + "会計記録");
     if (!ssFile) continue;
     const ss = SpreadsheetApp.openById(ssFile.getId());
-    const ledger = ss.getSheetByName("取引明細");
-    if (!ledger) continue;
-    const rows = readAllRows_(ledger).filter((r) => r["取引ID"] === p.transactionId && !r["取消フラグ"]);
-    if (rows.length === 0) continue;
-    const now = new Date();
-    rows.forEach((r) => {
-      const map = headerMap_(ledger);
-      ledger.getRange(r._row, map["取消フラグ"], 1, 1).setValue("TRUE");
-      ledger.getRange(r._row, map["取消理由"], 1, 1).setValue(p.reason);
-      ledger.getRange(r._row, map["取消日時"], 1, 1).setValue(now);
-    });
-    const fy = parseInt(f.getName(), 10);
-    recompute_(ss, fy, props);
-    return { ok: true, transactionId: p.transactionId, voided: rows.length };
+    if (!ss.getSheetByName("取引明細")) continue;
+    const count = applyVoid_(ss, parseInt(m[1], 10), p.transactionId, p.reason, props);
+    if (count > 0) return { ok: true, transactionId: p.transactionId, voided: count };
   }
   return { ok: false, error: "transaction not found" };
+}
+
+/**
+ * 取引に取消フラグを立て、領収書ファイルを「領収書/取消済み」へ移動し、再計算する。
+ * API (voidTransaction_) とスプレッドシートのカスタムメニューの両方から使う。
+ * 取消対象が無ければ 0 を返す。
+ */
+function applyVoid_(ss, fy, transactionId, reason, props) {
+  const ledger = ss.getSheetByName("取引明細");
+  const rows = readAllRows_(ledger).filter((r) => r["取引ID"] === transactionId && !r["取消フラグ"]);
+  if (rows.length === 0) return 0;
+  // 領収書ファイルの移動 (失敗しても取消自体は成立させる)
+  let newPath = null;
+  try {
+    newPath = moveReceiptToVoidFolder_(fy, rows, props);
+  } catch (err) {
+    console.log("receipt move on void failed: " + err);
+  }
+  const now = new Date();
+  const map = headerMap_(ledger);
+  rows.forEach((r) => {
+    ledger.getRange(r._row, map["取消フラグ"], 1, 1).setValue("TRUE");
+    ledger.getRange(r._row, map["取消理由"], 1, 1).setValue(reason || "");
+    ledger.getRange(r._row, map["取消日時"], 1, 1).setValue(now);
+    if (newPath) ledger.getRange(r._row, map["領収書保存パス"], 1, 1).setValue(newPath);
+  });
+  recompute_(ss, fy, props);
+  return rows.length;
 }
 
 function status_(p, props) {

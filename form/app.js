@@ -138,6 +138,8 @@ function receiptFieldsHtml() {
         <select class="r-payment">${optionsHtml(PAYMENT_METHODS, "選択してください")}</select></div>
       <div class="field"><label class="label">領収書全体の金額（円）</label>
         <input type="number" class="r-total" min="1" step="1" inputmode="numeric"></div>
+      <div class="field r-discount-field"><label class="label">値引き・ポイント利用額（円）</label>
+        <input type="number" class="r-discount" min="0" step="1" inputmode="numeric" value="0"></div>
     </div>
     <div class="uses"></div>
     <button type="button" class="sub add-use">＋ 用途を追加</button>
@@ -158,21 +160,33 @@ function collectUses(card) {
 function refreshCard(card) {
   const uses = collectUses(card);
   const sum = uses.reduce((a, u) => a + (u.amount || 0), 0);
+  const discountEl = $(".r-discount", card);
+  const discount = discountEl ? Number(discountEl.value || 0) : 0;
+  const net = sum - discount;
   const totalInput = $(".r-total", card);
   const total = totalInput ? Number(totalInput.value || 0) : 0;
-  // 追記モードでは、今回の用途合計は「領収書全体 − 登録済み合計」に一致すべき
+  // 追記モードでは、今回の用途合計は「領収書全体 − 登録済み合計」が目標になる。
+  // 途中提出 (目標未満) も許可する。判定は値引き後の金額で行う。
   const registered = Number(card.dataset.registeredAmount || 0);
   const target = total - registered;
   const box = $(".sum-check", card);
   if (!box) return;
-  if (total > 0) {
-    const diff = target - sum;
+  if (discount > 0 && sum > 0 && discount >= sum) {
+    box.textContent = "値引き・ポイント利用額は、用途の合計金額より小さくしてください。";
+    box.className = "sum-check ng";
+  } else if (total > 0) {
+    const diff = target - net;
+    const netLabel = discount > 0
+      ? `用途の合計（値引き後） ${net.toLocaleString()}円`
+      : `用途の合計 ${net.toLocaleString()}円`;
     box.textContent = diff === 0
-      ? `用途の合計 ${sum.toLocaleString()}円 ＝ ${registered > 0 ? "残りの金額" : "領収書全体の金額"}。一致しています。`
-      : `用途の合計 ${sum.toLocaleString()}円 / 目標 ${target.toLocaleString()}円（差額 ${diff.toLocaleString()}円）`;
-    box.className = "sum-check " + (diff === 0 ? "ok" : "ng");
+      ? `${netLabel} ＝ ${registered > 0 ? "残りの金額" : "領収書全体の金額"}。一致しています。`
+      : diff > 0
+        ? `${netLabel} / 目標 ${target.toLocaleString()}円（残り ${diff.toLocaleString()}円 — 途中提出もできます。残りは後から追記できます）`
+        : `${netLabel} / 目標 ${target.toLocaleString()}円（${(-diff).toLocaleString()}円 超えています）`;
+    box.className = "sum-check " + (diff >= 0 ? "ok" : "ng");
   } else {
-    box.textContent = `用途の合計 ${sum.toLocaleString()}円`;
+    box.textContent = `用途の合計 ${net.toLocaleString()}円`;
     box.className = "sum-check";
   }
   validateExpense();
@@ -286,6 +300,9 @@ noReceiptCard.innerHTML = `
     <label class="label">領収証等による証明ができない理由</label>
     <textarea class="r-noreceipt-reason" rows="2" placeholder="例: 自動販売機での購入のため領収書が発行されない"></textarea>
   </div>`;
+// 領収書なしの支出に値引きの概念は無いため、値引き欄は取り除く
+const noReceiptDiscountField = $(".r-discount-field", noReceiptCard);
+if (noReceiptDiscountField) noReceiptDiscountField.remove();
 bindCard(noReceiptCard);
 
 $$('input[name="receipt-mode"]').forEach((r) =>
@@ -299,7 +316,7 @@ $$('input[name="receipt-mode"]').forEach((r) =>
 
 // ---------- 支出: 検証と送信 ----------
 
-function validateReceiptCard(card, label) {
+function validateReceiptCard(card, label, requireExact) {
   const errors = [];
   if (!$(".r-date", card).value) errors.push(`${label}: 購入日が未入力です`);
   if (!$(".r-buyer", card).value.trim()) errors.push(`${label}: 購入者氏名が未入力です`);
@@ -317,9 +334,17 @@ function validateReceiptCard(card, label) {
     if (!u.itemName) errors.push(`${label}: 用途${i + 1}の品目名が未入力です`);
   });
   const sum = uses.reduce((a, u) => a + u.amount, 0);
+  const discountEl = $(".r-discount", card);
+  const discount = discountEl ? Number(discountEl.value || 0) : 0;
+  if (discount < 0 || !Number.isInteger(discount) || (discount > 0 && sum > 0 && discount >= sum)) {
+    errors.push(`${label}: 値引き・ポイント利用額が不正です（用途の合計金額より小さくしてください）`);
+  }
   const target = total - Number(card.dataset.registeredAmount || 0);
-  if (total > 0 && sum !== target) {
-    errors.push(`${label}: 用途の合計（${sum.toLocaleString()}円）が目標額（${target.toLocaleString()}円）と一致しません`);
+  if (total > 0 && requireExact && sum - discount !== target) {
+    errors.push(`${label}: 用途の合計（${(sum - discount).toLocaleString()}円）が金額（${target.toLocaleString()}円）と一致しません`);
+  }
+  if (total > 0 && !requireExact && sum - discount > target) {
+    errors.push(`${label}: 用途の合計（値引き後 ${(sum - discount).toLocaleString()}円）が目標額（${target.toLocaleString()}円）を超えています`);
   }
   return errors;
 }
@@ -328,7 +353,7 @@ function validateExpense() {
   const without = $('input[name="receipt-mode"]:checked').value === "without";
   let errors = [];
   if (without) {
-    errors = validateReceiptCard(noReceiptCard, "領収書なし支出");
+    errors = validateReceiptCard(noReceiptCard, "領収書なし支出", true);
     if (!$(".r-noreceipt-reason", noReceiptCard).value.trim()) {
       errors.push("証明できない理由が未入力です");
     }
@@ -359,6 +384,7 @@ function receiptPayload(card) {
     vendor: $(".r-vendor", card).value.trim(),
     paymentMethodId: $(".r-payment", card).value,
     receiptTotal: Number($(".r-total", card).value || 0),
+    discount: $(".r-discount", card) ? Number($(".r-discount", card).value || 0) : 0,
     uses: collectUses(card),
   };
 }

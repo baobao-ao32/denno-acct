@@ -78,6 +78,8 @@ function ensureFiscalEnv_(fy, props) {
     ss = SpreadsheetApp.openById(ssFile.getId());
     ensureTabs_(ss);
   }
+  // カスタムメニュー「会計」用の onOpen トリガーを保証する (失敗しても登録処理は止めない)
+  ensureMenuTrigger_(ss);
   return { yearFolder: yearFolder, receiptRoot: receiptRoot, categoryFolders: categoryFolders, ss: ss };
 }
 
@@ -117,9 +119,15 @@ function ensureSheetWithHeaders_(ss, name, headers) {
   }
   const actual = sheet.getRange(1, 1, 1, Math.max(headers.length, sheet.getLastColumn())).getValues()[0];
   for (let i = 0; i < headers.length; i++) {
-    if (actual[i] !== headers[i]) {
-      throw new Error("header mismatch in sheet " + name + ": expected '" + headers[i] + "' at column " + (i + 1) + ", got '" + actual[i] + "'");
+    if (actual[i] === headers[i]) continue;
+    // 末尾への列追加だけは移行として許可する。その位置以降が全部空なら、
+    // 不足分のヘッダを書き足す (例: 「値引き額」列の追加)。
+    const restEmpty = actual.slice(i).every((v) => v === "" || v == null);
+    if ((actual[i] === "" || actual[i] == null) && restEmpty) {
+      sheet.getRange(1, i + 1, 1, headers.length - i).setValues([headers.slice(i)]);
+      return sheet;
     }
+    throw new Error("header mismatch in sheet " + name + ": expected '" + headers[i] + "' at column " + (i + 1) + ", got '" + actual[i] + "'");
   }
   return sheet;
 }

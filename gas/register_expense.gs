@@ -54,6 +54,16 @@ function registerOneReceipt_(receipt, p, props) {
   const ledger = ss.getSheetByName("取引明細");
   const now = new Date();
 
+  // 値引き・ポイント利用額: 用途はレシート表記 (値引き前) の金額で受け取り、
+  // ここで按分して実支払額ベースの用途金額に直す。以後の照合はすべて按分後で行う。
+  const discount = receipt.discount == null ? 0 : Number(receipt.discount);
+  const grossSum = receipt.uses.reduce((a, u) => a + u.amount, 0);
+  if (!Number.isInteger(discount) || discount < 0 || (discount > 0 && discount >= grossSum)) {
+    throw new Error("値引き・ポイント利用額が不正です（用途の合計金額より小さい必要があります）");
+  }
+  const netUses = applyDiscount_(receipt.uses, discount);
+  const netSum = netUses.reduce((a, u) => a + u.amount, 0);
+
   // 既存領収書への用途追記 (ファイルのハッシュで照合)
   if (!receipt.proofImpossible && receipt.file && receipt.file.sha256) {
     let appendEnv = env;
@@ -74,17 +84,17 @@ function registerOneReceipt_(receipt, p, props) {
       const transactionId = existing["取引ID"];
       const storedTotal = Number(existing["領収書全体の金額"] || 0);
       const existingSum = sumTransactionUses_(appendSs.getSheetByName("取引明細"), transactionId);
-      const newSum = receipt.uses.reduce((a, u) => a + u.amount, 0);
       if (storedTotal > 0 && receipt.receiptTotal !== storedTotal) {
         throw new Error("領収書全体の金額が、登録済みの金額（" + storedTotal.toLocaleString() + "円）と一致しません");
       }
       if (storedTotal > 0 && existingSum >= storedTotal) {
         throw new Error("この領収書は既に登録が完了しています（取引ID: " + transactionId + "）。追加の用途は登録できません");
       }
-      if (existingSum + newSum !== receipt.receiptTotal) {
-        throw new Error("用途の金額が合いません: 登録済み " + existingSum.toLocaleString() + "円 + 今回 " + newSum.toLocaleString() + "円 != 領収書全体 " + receipt.receiptTotal.toLocaleString() + "円（追記は残りの金額をちょうど埋める必要があります）");
+      // 途中提出を許可するため、追記は「登録済み + 今回分 <= 総額」なら通す
+      if (existingSum + netSum > receipt.receiptTotal) {
+        throw new Error("用途の金額が領収書全体の金額を超えています: 登録済み " + existingSum.toLocaleString() + "円 + 今回（値引き後） " + netSum.toLocaleString() + "円 > 領収書全体 " + receipt.receiptTotal.toLocaleString() + "円");
       }
-      const rows = receipt.uses.map((u, i) => buildLedgerRow_({
+      const rows = netUses.map((u, i) => buildLedgerRow_({
         transactionId: transactionId,
         detailIndex: existing._maxDetailIndex + i + 1,
         kind: "expense",
@@ -103,22 +113,26 @@ function registerOneReceipt_(receipt, p, props) {
         sha256: receipt.file.sha256,
         proofImpossible: false,
         proofImpossibleReason: "",
+        discount: discount,
       }));
       appendRowsByHeader_(appendSs.getSheetByName("取引明細"), rows);
       appendLog_(appendSs.getSheetByName("APIログ"), p.clientRequestId, "expense", transactionId, "ok-appended");
-      moveReceiptFileIfNeeded_(appendEnv, existing, receipt.uses, props);
+      moveReceiptFileIfNeeded_(appendEnv, existing, netUses, props);
       recompute_(appendSs, appendFy, props);
       return { transactionId: transactionId, appended: true };
     }
   }
 
-  // 新規取引 (用途の合計が領収書全体の金額と完全一致すること)
-  const useSum = receipt.uses.reduce((a, u) => a + u.amount, 0);
-  if (useSum !== receipt.receiptTotal) {
-    throw new Error("use amounts do not sum to receiptTotal: " + useSum + " != " + receipt.receiptTotal);
+  // 新規取引。途中提出 (合計が総額未満) を許可する。ただし領収書なし
+  // (証明不可) は追記で埋める手段が無いため、従来通り完全一致を要求する。
+  if (netSum > receipt.receiptTotal) {
+    throw new Error("用途の金額（値引き後）が領収書全体の金額を超えています: " + netSum.toLocaleString() + "円 > " + receipt.receiptTotal.toLocaleString() + "円");
+  }
+  if (receipt.proofImpossible && netSum !== receipt.receiptTotal) {
+    throw new Error("領収書なしの支出は、用途の合計が支出金額と一致する必要があります: " + netSum.toLocaleString() + "円 != " + receipt.receiptTotal.toLocaleString() + "円");
   }
   const transactionId = "TX-" + Utilities.getUuid();
-  const repCategoryId = representativeCategoryId_(receipt.uses);
+  const repCategoryId = representativeCategoryId_(netUses);
   let receiptUrl = "";
   let receiptPath = "";
   let receiptCategory = "";
@@ -136,7 +150,7 @@ function registerOneReceipt_(receipt, p, props) {
     receiptCategory = CATEGORIES[repCategoryId];
   }
 
-  const rows = receipt.uses.map((u, i) => buildLedgerRow_({
+  const rows = netUses.map((u, i) => buildLedgerRow_({
     transactionId: transactionId,
     detailIndex: i + 1,
     kind: "expense",
@@ -155,6 +169,7 @@ function registerOneReceipt_(receipt, p, props) {
     sha256: receipt.proofImpossible ? "" : receipt.file.sha256,
     proofImpossible: !!receipt.proofImpossible,
     proofImpossibleReason: receipt.proofImpossibleReason || "",
+    discount: discount,
   }));
   appendRowsByHeader_(ledger, rows);
   appendLog_(ss.getSheetByName("APIログ"), p.clientRequestId, "expense", transactionId, "ok");
@@ -184,6 +199,7 @@ function buildLedgerRow_(o) {
     "用途別メモ": o.use.memo || "",
     "用途別金額合計": o.use.amount,
     "領収書全体の金額": o.receiptTotal,
+    "値引き額": o.discount || 0,
     "領収書URL": o.receiptUrl,
     "領収書保存パス": o.receiptPath,
     "領収書保存カテゴリ": o.receiptCategory,
@@ -196,4 +212,31 @@ function buildLedgerRow_(o) {
     "取消理由": "",
     "取消日時": "",
   };
+}
+
+/**
+ * 値引き・ポイント利用額を用途の金額比で按分し、按分後の用途一覧を返す。
+ * 端数は金額の大きい用途から1円ずつ配る。どの用途も1円以上を保つ。
+ */
+function applyDiscount_(uses, discount) {
+  if (!discount) return uses;
+  const gross = uses.reduce((a, u) => a + u.amount, 0);
+  const shares = uses.map((u) => Math.floor((discount * u.amount) / gross));
+  let remainder = discount - shares.reduce((a, b) => a + b, 0);
+  const order = uses.map((u, i) => i).sort((a, b) => uses[b].amount - uses[a].amount);
+  let guard = 0;
+  while (remainder > 0 && guard < 10000) {
+    guard++;
+    let progressed = false;
+    for (const i of order) {
+      if (remainder <= 0) break;
+      if (shares[i] < uses[i].amount - 1) {
+        shares[i]++;
+        remainder--;
+        progressed = true;
+      }
+    }
+    if (!progressed) break;
+  }
+  return uses.map((u, i) => Object.assign({}, u, { amount: u.amount - shares[i] }));
 }

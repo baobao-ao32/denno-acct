@@ -119,3 +119,20 @@ function moveReceiptFileIfNeeded_(env, existing, newUses, props) {
     ledger.getRange(r._row, map["領収書保存カテゴリ"], 1, 1).setValue(CATEGORIES[newRepId]);
   });
 }
+
+/**
+ * void 時に領収書ファイルを「領収書/取消済み」フォルダへ移動する。
+ * 移動後の保存パスを返す。領収書が無い取引 (収入・証明不可) では null。
+ */
+function moveReceiptToVoidFolder_(fy, rows, props) {
+  const withUrl = rows.filter((r) => r["領収書URL"]);
+  if (withUrl.length === 0) return null;
+  const match = String(withUrl[0]["領収書URL"]).match(/\/d\/([^\/]+)/);
+  if (!match) return null;
+  const env = ensureFiscalEnv_(fy, props);
+  let voidFolder = findChildFolder_(env.receiptRoot, "取消済み");
+  if (!voidFolder) voidFolder = env.receiptRoot.createFolder("取消済み");
+  const file = DriveApp.getFileById(match[1]);
+  file.moveTo(voidFolder);
+  return fiscalYearLabel_(fy) + "/領収書/取消済み/" + file.getName();
+}

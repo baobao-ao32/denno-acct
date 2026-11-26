@@ -60,8 +60,12 @@ function validatePayload(p) {
       if (r.uses.length > MAX_USES) return `too many uses (max ${MAX_USES})`;
       if (!r.uses.every(validateUse)) return "invalid use entry";
       const sum = r.uses.reduce((a, u) => a + u.amount, 0);
+      const discount = r.discount == null ? 0 : r.discount;
+      if (!Number.isInteger(discount) || discount < 0 || (discount > 0 && discount >= sum)) {
+        return "invalid discount";
+      }
       // 完全一致は GAS が取引単位で検証する (分割提出の追記があるため、ここでは超過のみ弾く)
-      if (sum > r.receiptTotal) return "use amounts exceed receiptTotal";
+      if (sum - discount > r.receiptTotal) return "use amounts exceed receiptTotal";
       if (r.proofImpossible) {
         if (!isNonEmptyString(r.proofImpossibleReason)) return "proofImpossibleReason is required";
       } else if (!r.file || !isNonEmptyString(r.file.sha256) || !isNonEmptyString(r.file.base64)) {
