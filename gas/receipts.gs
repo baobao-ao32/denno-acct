@@ -70,7 +70,11 @@ function checkReceipt_(p, props) {
     exists: true,
     transactionId: r["取引ID"],
     fiscalYear: found.fy,
-    purchaseDate: r["購入日"],
+    // 購入日列は日付書式のため getValues() では Date で返る。フォームの
+    // <input type="date"> に入るよう "yyyy-MM-dd" 文字列に直して返す。
+    purchaseDate: r["購入日"] instanceof Date
+      ? Utilities.formatDate(r["購入日"], "Asia/Tokyo", "yyyy-MM-dd")
+      : r["購入日"],
     receiptTotal: Number(r["領収書全体の金額"] || 0),
     registeredAmount: registeredAmount,
     buyerName: r["購入者氏名"],
@@ -135,4 +139,13 @@ function moveReceiptToVoidFolder_(fy, rows, props) {
   const file = DriveApp.getFileById(match[1]);
   file.moveTo(voidFolder);
   return fiscalYearLabel_(fy) + "/領収書/取消済み/" + file.getName();
+}
+
+/** アップロードされたファイル名を Drive 保存用に無害化する (パス区切り等を除く)。 */
+function sanitizeFileName_(name) {
+  const cleaned = String(name || "receipt")
+    .replace(/[\\/:*?"<>|\x00-\x1f]/g, "_")
+    .replace(/^\.+/, "")
+    .trim();
+  return cleaned || "receipt";
 }

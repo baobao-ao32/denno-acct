@@ -78,8 +78,6 @@ function ensureFiscalEnv_(fy, props) {
     ss = SpreadsheetApp.openById(ssFile.getId());
     ensureTabs_(ss);
   }
-  // カスタムメニュー「会計」用の onOpen トリガーを保証する (失敗しても登録処理は止めない)
-  ensureMenuTrigger_(ss);
   return { yearFolder: yearFolder, receiptRoot: receiptRoot, categoryFolders: categoryFolders, ss: ss };
 }
 

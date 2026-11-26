@@ -43,8 +43,12 @@ function validatePayload_(p) {
         if (!isFinite(u.amount) || u.amount <= 0) return "use amount must be positive";
         sum += u.amount;
       }
+      const discount = r.discount == null ? 0 : Number(r.discount);
+      if (!Number.isInteger(discount) || discount < 0 || (discount > 0 && discount >= sum)) {
+        return "invalid discount";
+      }
       // 合計の完全一致は登録時に取引単位で検証する (分割提出の追記があるため、ここでは超過のみ弾く)
-      if (sum > r.receiptTotal) return "use amounts exceed receiptTotal";
+      if (sum - discount > r.receiptTotal) return "use amounts exceed receiptTotal";
       if (r.proofImpossible) {
         if (!(typeof r.proofImpossibleReason === "string" && r.proofImpossibleReason.trim())) {
           return "proofImpossibleReason is required";
@@ -66,6 +70,16 @@ function validatePayload_(p) {
   }
   if (p.action === "status") {
     if (!p.clientRequestId) return "clientRequestId is required";
+    return null;
+  }
+  if (p.action === "recompute") {
+    if (!Number.isInteger(p.fiscalYear) || p.fiscalYear < 2000 || p.fiscalYear > 2100) {
+      return "fiscalYear is invalid";
+    }
+    return null;
+  }
+  if (p.action === "toggleSettled") {
+    if (!p.transactionId) return "transactionId is required";
     return null;
   }
   return "unknown request";

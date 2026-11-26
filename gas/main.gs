@@ -49,6 +49,12 @@ function doPost(e) {
     if (payload.action === "void") {
       return json_(voidTransaction_(payload, props));
     }
+    if (payload.action === "recompute") {
+      return json_(recomputeAction_(payload, props));
+    }
+    if (payload.action === "toggleSettled") {
+      return json_(toggleSettled_(payload, props));
+    }
     if (payload.action === "status") {
       return json_(status_(payload, props));
     }

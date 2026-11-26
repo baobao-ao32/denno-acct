@@ -127,6 +127,34 @@ export default {
       return forwardToGas(env, { action: "status", clientRequestId });
     }
 
+    // 管理用 (会計担当のみ。アクセス制御は Pages 側の Cloudflare Access で行う)
+    if (url.pathname.startsWith("/api/admin/") && request.method === "POST") {
+      let body;
+      try {
+        body = await request.json();
+      } catch {
+        return json({ ok: false, error: "invalid JSON" }, 400);
+      }
+      if (!env.GAS_ENDPOINT) return json({ ok: false, error: "GAS not connected" }, 503);
+      if (url.pathname === "/api/admin/recompute") {
+        const fy = Number(body.fiscalYear);
+        if (!Number.isInteger(fy) || fy < 2000 || fy > 2100) {
+          return json({ ok: false, error: "fiscalYear is invalid" }, 400);
+        }
+        return forwardToGas(env, { action: "recompute", fiscalYear: fy });
+      }
+      if (url.pathname === "/api/admin/void") {
+        if (!isNonEmptyString(body.transactionId)) return json({ ok: false, error: "transactionId is required" }, 400);
+        if (!isNonEmptyString(body.reason)) return json({ ok: false, error: "reason is required" }, 400);
+        return forwardToGas(env, { action: "void", transactionId: body.transactionId, reason: body.reason });
+      }
+      if (url.pathname === "/api/admin/toggle-settled") {
+        if (!isNonEmptyString(body.transactionId)) return json({ ok: false, error: "transactionId is required" }, 400);
+        return forwardToGas(env, { action: "toggleSettled", transactionId: body.transactionId });
+      }
+      return json({ ok: false, error: "not found" }, 404);
+    }
+
     if (url.pathname === "/api/submit" && request.method === "POST") {
       let payload;
       try {

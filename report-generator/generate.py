@@ -82,11 +82,15 @@ def aggregate(data):
         if not tx.get("receipt"):
             unprovable += total
         else:
-            primary = max(tx["lines"], key=lambda line: line["amount"])
+            # 代表カテゴリは GAS と同じ「カテゴリ別合計が最大」で決める
+            # (単一明細の最大ではない)。科目は代表カテゴリ内の最大明細から取る。
+            rep_id = _representative_category(tx["lines"])
+            primary = max((l for l in tx["lines"] if l["category_id"] == rep_id),
+                          key=lambda line: line["amount"])
             receipts.append({
                 "date": tx["date"],
                 "counterparty": tx["counterparty"],
-                "category_id": primary["category_id"],
+                "category_id": rep_id,
                 "subject": primary["subject"],
                 "amount": total,
                 "lines": tx["lines"],
@@ -582,7 +586,12 @@ def load_fiscal_folder(folder):
     receipt_root = os.path.join(base, "領収書")
     if os.path.isdir(receipt_root):
         for path in glob.glob(os.path.join(receipt_root, "**", "*"), recursive=True):
-            if os.path.isfile(path) and os.path.normpath(path) not in referenced:
+            if not os.path.isfile(path):
+                continue
+            # void 済み領収書の退避先は孤児扱いしない
+            if os.path.relpath(path, receipt_root).split(os.sep)[0] == "取消済み":
+                continue
+            if os.path.normpath(path) not in referenced:
                 warnings.append(
                     f"台帳に記録の無い領収書ファイル: {os.path.relpath(path, base)}")
     else:

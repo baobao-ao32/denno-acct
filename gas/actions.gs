@@ -93,3 +93,39 @@ function appendLog_(log, clientRequestId, kind, transactionId, result) {
     "結果": result,
   }]);
 }
+
+/** 管理用 (管理用ページから): 指定年度の集計を再計算する。 */
+function recomputeAction_(p, props) {
+  const fy = Number(p.fiscalYear);
+  const env = ensureFiscalEnv_(fy, props);
+  recompute_(env.ss, fy, props);
+  return { ok: true, fiscalYear: fy };
+}
+
+/** 管理用 (管理用ページから): 取引の精算状態を 未精算 ⇔ 精算済み で切り替える。 */
+function toggleSettled_(p, props) {
+  const root = DriveApp.getFolderById(props.getProperty("ROOT_FOLDER_ID"));
+  const folders = root.getFolders();
+  while (folders.hasNext()) {
+    const f = folders.next();
+    if (!/^(\d{4})年度$/.test(f.getName())) continue;
+    const ssFile = findChildFile_(f, f.getName() + "会計記録");
+    if (!ssFile) continue;
+    const ss = SpreadsheetApp.openById(ssFile.getId());
+    const ledger = ss.getSheetByName("取引明細");
+    if (!ledger) continue;
+    const rows = readAllRows_(ledger).filter((r) => r["取引ID"] === p.transactionId && !r["取消フラグ"]);
+    if (rows.length === 0) continue;
+    const current = rows[0]["精算状態"];
+    if (current === "精算不要") {
+      return { ok: false, error: "この取引は精算不要（直接支払い）のため変更できません" };
+    }
+    const next = current === "精算済み" ? "未精算" : "精算済み";
+    const map = headerMap_(ledger);
+    rows.forEach((r) => {
+      ledger.getRange(r._row, map["精算状態"], 1, 1).setValue(next);
+    });
+    return { ok: true, transactionId: p.transactionId, settled: next };
+  }
+  return { ok: false, error: "transaction not found" };
+}

@@ -138,15 +138,18 @@ function registerOneReceipt_(receipt, p, props) {
   let receiptCategory = "";
   if (!receipt.proofImpossible && receipt.file) {
     const folder = env.categoryFolders[repCategoryId];
+    // 保存名は取引IDプレフィックス付きの一意名にする。同名ファイル (IMG_0001.jpg 等) が
+    // 同一フォルダに共存すると、ZIP解凍時に上書き・リネームされて台帳の保存パスと食い違うため。
+    const savedName = transactionId + "_" + sanitizeFileName_(receipt.file.name);
     const blob = Utilities.newBlob(
       Utilities.base64Decode(receipt.file.base64),
       receipt.file.mimeType,
-      receipt.file.name
+      savedName
     );
     const file = folder.createFile(blob);
     file.setDescription("denno-acct " + transactionId + " sha256:" + receipt.file.sha256);
     receiptUrl = file.getUrl();
-    receiptPath = fiscalYearLabel_(fy) + "/領収書/" + CATEGORIES[repCategoryId] + "/" + receipt.file.name;
+    receiptPath = fiscalYearLabel_(fy) + "/領収書/" + CATEGORIES[repCategoryId] + "/" + savedName;
     receiptCategory = CATEGORIES[repCategoryId];
   }
 

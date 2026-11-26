@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>電脳サークル 会計管理（会計担当用）</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>電脳サークル 会計管理</h1>
+  <p class="hint">会計担当用ページです。再計算・取消・精算状態の変更を行います。取引IDはスプレッドシートの「取引明細」タブで確認してください。</p>
+</header>
+
+<main>
+  <section>
+    <h2>集計の再計算</h2>
+    <p class="hint">取引明細や設定タブ（前年度繰越金・役員氏名）を手動で編集したあとに実行してください。</p>
+    <div class="field">
+      <label class="label" for="recompute-year">年度</label>
+      <input type="number" id="recompute-year" min="2000" max="2100" step="1" placeholder="例: 2025">
+    </div>
+    <div class="actions">
+      <button id="do-recompute" class="primary">再計算する</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>取引の取消（void）</h2>
+    <p class="hint">取消した取引は集計から除外され、領収書ファイルは「領収書/取消済み」フォルダへ移動します。元には戻せません。</p>
+    <div class="field">
+      <label class="label" for="void-transaction">取引ID</label>
+      <input type="text" id="void-transaction" placeholder="TX-...">
+    </div>
+    <div class="field">
+      <label class="label" for="void-reason">取消理由</label>
+      <textarea id="void-reason" rows="2" placeholder="例: 金額を間違えて登録したため"></textarea>
+    </div>
+    <div class="actions">
+      <button id="do-void" class="primary">取り消す</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>精算状態の変更</h2>
+    <p class="hint">取引の精算状態を「未精算 ⇔ 精算済み」で切り替えます（精算不要の取引は変更できません）。</p>
+    <div class="field">
+      <label class="label" for="toggle-transaction">取引ID</label>
+      <input type="text" id="toggle-transaction" placeholder="TX-...">
+    </div>
+    <div class="actions">
+      <button id="do-toggle" class="primary">精算状態を切り替える</button>
+    </div>
+  </section>
+
+  <div id="message" role="status"></div>
+  <p class="hint" style="margin-top:24px"><a href="index.html">← 報告フォームに戻る</a></p>
+</main>
+
+<script type="module" src="admin.js"></script>
+</body>
+</html>
