@@ -82,11 +82,10 @@ function registerOneReceipt_(receipt, p, props) {
     const transactionId = existing["取引ID"];
     const storedTotal = Number(existing["領収書全体の金額"] || 0);
     const existingSum = sumTransactionUses_(ledger, transactionId);
-    // 値引きの二重控除を防ぐ: 値引きは最初の提出でのみ受け付ける
-    const txRows = readAllRows_(ledger).filter((r) => r["取引ID"] === transactionId && !r["取消フラグ"]);
-    const existingDiscount = Math.max.apply(null, txRows.map((r) => Number(r["値引き額"] || 0)).concat([0]));
-    if (discount > 0 && existingDiscount > 0) {
-      throw new Error("この領収書には既に値引き・ポイント利用額（" + existingDiscount.toLocaleString() + "円）が登録されています。追記時の値引き額は0にしてください");
+    // 値引きは最初の提出でのみ受け付ける (追記で入れると値引きが今回分だけに
+    // 偏り、二重控除にもなるため、追記時は値引き額があれば一律に弾く)
+    if (discount > 0) {
+      throw new Error("値引き・ポイント利用額は最初の提出でのみ入力できます。追記時の値引き額は0にしてください");
     }
     if (storedTotal > 0 && receipt.receiptTotal !== storedTotal) {
       throw new Error("領収書全体の金額が、登録済みの金額（" + storedTotal.toLocaleString() + "円）と一致しません");
@@ -111,6 +110,9 @@ function registerOneReceipt_(receipt, p, props) {
       buyerName: existing["購入者氏名"],
       vendor: existing["購入先"],
       paymentMethodId: existing["支払方法ID"],
+      // 精算状態も既存行から引き継ぐ (1回目が精算済みでも追記行が未精算に
+      // ならないように。buildLedgerRow_ の再計算では混在してしまう)
+      settlementState: existing["精算状態"],
       use: u,
       receiptTotal: receipt.receiptTotal,
       receiptUrl: existing["領収書URL"],
@@ -123,7 +125,7 @@ function registerOneReceipt_(receipt, p, props) {
     }));
     appendRowsByHeader_(ledger, rows);
     appendLog_(ss.getSheetByName("APIログ"), p.clientRequestId, "expense", transactionId, "ok-appended");
-    moveReceiptFileIfNeeded_(env, existing, netUses, props);
+    moveReceiptFileIfNeeded_(env, existing, netUses, props, fy);
     recompute_(ss, fy, props);
     return { transactionId: transactionId, appended: true };
   }
@@ -215,7 +217,7 @@ function buildLedgerRow_(o) {
     "領収書ファイルSHA256": o.sha256,
     "証明不可フラグ": o.proofImpossible ? "TRUE" : "",
     "証明不可理由": sanitizeCellText_(o.proofImpossibleReason || ""),
-    "精算状態": o.paymentMethodId === "direct" ? "精算不要" : "未精算",
+    "精算状態": o.settlementState || (o.paymentMethodId === "direct" ? "精算不要" : "未精算"),
     "会計担当メモ": "",
     "取消フラグ": "",
     "取消理由": "",

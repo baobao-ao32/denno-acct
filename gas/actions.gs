@@ -26,7 +26,7 @@ function voidTransaction_(p, props) {
     if (!ssFile) continue;
     const ss = SpreadsheetApp.openById(ssFile.getId());
     if (!ss.getSheetByName("取引明細")) continue;
-    const count = applyVoid_(ss, parseInt(m[1], 10), p.transactionId, p.reason, props);
+    const count = applyVoid_(ss, parseInt(m[1], 10), p.transactionId, p.reason, props, p.actorEmail);
     if (count > 0) return { ok: true, transactionId: p.transactionId, voided: count };
   }
   return { ok: false, error: "transaction not found" };
@@ -34,12 +34,11 @@ function voidTransaction_(p, props) {
 
 /**
  * 取引に取消フラグを立て、領収書ファイルを「領収書/取消済み」へ移動し、再計算する。
- * API (voidTransaction_) とスプレッドシートのカスタムメニューの両方から使う。
- * 取消対象が無ければ 0 を返す。
+ * 取消対象が無ければ 0 を返す。管理操作として APIログ に操作者を残す。
  */
-function applyVoid_(ss, fy, transactionId, reason, props) {
+function applyVoid_(ss, fy, transactionId, reason, props, actorEmail) {
   const ledger = ss.getSheetByName("取引明細");
-  const rows = readAllRows_(ledger).filter((r) => r["取引ID"] === transactionId && !r["取消フラグ"]);
+  const rows = readAllRows_(ledger).filter((r) => r["取引ID"] === transactionId && !isTruthy_(r["取消フラグ"]));
   if (rows.length === 0) return 0;
   // 領収書ファイルの移動 (失敗しても取消自体は成立させる)
   let newPath = null;
@@ -56,6 +55,8 @@ function applyVoid_(ss, fy, transactionId, reason, props) {
     ledger.getRange(r._row, map["取消日時"], 1, 1).setValue(now);
     if (newPath) ledger.getRange(r._row, map["領収書保存パス"], 1, 1).setValue(newPath);
   });
+  appendLog_(ss.getSheetByName("APIログ"), "admin", "void", transactionId,
+    "ok by " + (actorEmail || "unknown"));
   recompute_(ss, fy, props);
   return rows.length;
 }
@@ -97,8 +98,18 @@ function appendLog_(log, clientRequestId, kind, transactionId, result) {
 /** 管理用 (管理用ページから): 指定年度の集計を再計算する。 */
 function recomputeAction_(p, props) {
   const fy = Number(p.fiscalYear);
-  const env = ensureFiscalEnv_(fy, props);
-  recompute_(env.ss, fy, props);
+  // 再計算は既存の年度にだけ行う。年度の打ち間違いで空の年度フォルダや
+  // スプレッドシートが作られないよう、ここでは環境を生成しない。
+  const root = DriveApp.getFolderById(props.getProperty("ROOT_FOLDER_ID"));
+  const yearFolder = findChildFolder_(root, fiscalYearLabel_(fy));
+  const ssFile = yearFolder && findChildFile_(yearFolder, fiscalYearLabel_(fy) + "会計記録");
+  if (!ssFile) {
+    return { ok: false, error: "指定年度の会計記録が見つかりません" };
+  }
+  const ss = SpreadsheetApp.openById(ssFile.getId());
+  recompute_(ss, fy, props);
+  appendLog_(ss.getSheetByName("APIログ"), "admin", "recompute", "",
+    "ok by " + (p.actorEmail || "unknown"));
   return { ok: true, fiscalYear: fy };
 }
 
@@ -114,7 +125,7 @@ function toggleSettled_(p, props) {
     const ss = SpreadsheetApp.openById(ssFile.getId());
     const ledger = ss.getSheetByName("取引明細");
     if (!ledger) continue;
-    const rows = readAllRows_(ledger).filter((r) => r["取引ID"] === p.transactionId && !r["取消フラグ"]);
+    const rows = readAllRows_(ledger).filter((r) => r["取引ID"] === p.transactionId && !isTruthy_(r["取消フラグ"]));
     if (rows.length === 0) continue;
     if (rows[0]["種別"] !== "expense") {
       return { ok: false, error: "収入の取引は精算状態を変更できません" };
@@ -128,6 +139,8 @@ function toggleSettled_(p, props) {
     rows.forEach((r) => {
       ledger.getRange(r._row, map["精算状態"], 1, 1).setValue(next);
     });
+    appendLog_(ss.getSheetByName("APIログ"), "admin", "toggleSettled", p.transactionId,
+      "ok (" + next + ") by " + (p.actorEmail || "unknown"));
     return { ok: true, transactionId: p.transactionId, settled: next };
   }
   return { ok: false, error: "transaction not found" };

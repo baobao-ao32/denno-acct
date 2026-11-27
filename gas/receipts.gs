@@ -51,7 +51,7 @@ function findReceiptByHashAllYears_(props, sha256) {
 /** 取引の用途金額の合計 (取消分を除く)。 */
 function sumTransactionUses_(ledger, transactionId) {
   return readAllRows_(ledger)
-    .filter((r) => r["取引ID"] === transactionId && !r["取消フラグ"])
+    .filter((r) => r["取引ID"] === transactionId && !isTruthy_(r["取消フラグ"]))
     .reduce((a, r) => a + Number(r["用途別金額合計"] || 0), 0);
 }
 
@@ -82,7 +82,7 @@ function checkReceipt_(p, props) {
 
 /** 同じSHA256の領収書を持つ既存取引を探す。見つかればその取引IDと最大の明細番号を返す。 */
 function findTransactionByHash_(ledger, sha256) {
-  const rows = readAllRows_(ledger).filter((r) => r["領収書ファイルSHA256"] === sha256 && !r["取消フラグ"]);
+  const rows = readAllRows_(ledger).filter((r) => r["領収書ファイルSHA256"] === sha256 && !isTruthy_(r["取消フラグ"]));
   if (rows.length === 0) return null;
   let maxDetail = 0;
   for (const r of rows) {
@@ -98,10 +98,10 @@ function findTransactionByHash_(ledger, sha256) {
  * 用途の追記で代表カテゴリが変わった場合、領収書ファイルを正しいフォルダへ移動し、
  * 台帳の保存パス/保存カテゴリを更新する。
  */
-function moveReceiptFileIfNeeded_(env, existing, newUses, props) {
+function moveReceiptFileIfNeeded_(env, existing, newUses, props, fy) {
   const ss = env.ss;
   const ledger = ss.getSheetByName("取引明細");
-  const rows = readAllRows_(ledger).filter((r) => r["取引ID"] === existing["取引ID"] && !r["取消フラグ"]);
+  const rows = readAllRows_(ledger).filter((r) => r["取引ID"] === existing["取引ID"] && !isTruthy_(r["取消フラグ"]));
   const allUses = rows.map((r) => ({ categoryId: r["用途別カテゴリID"], amount: Number(r["用途別金額合計"] || 0) }));
   const newRepId = representativeCategoryId_(allUses);
   const oldCategoryName = existing["領収書保存カテゴリ"];
@@ -114,10 +114,11 @@ function moveReceiptFileIfNeeded_(env, existing, newUses, props) {
   const newFolder = env.categoryFolders[newRepId];
   file.moveTo(newFolder);
   const fileName = file.getName();
-  const newPath = fiscalYearLabel_(fiscalYearOf_(existing["購入日"])) + "/領収書/" + CATEGORIES[newRepId] + "/" + fileName;
+  // 年度は呼び出し元が確定した fy を使う (購入日から再計算しない)
+  const newPath = fiscalYearLabel_(fy) + "/領収書/" + CATEGORIES[newRepId] + "/" + fileName;
   // 保存パス/カテゴリを書き換える (他列は触らない)
-  rows.forEach((r, i) => {
-    const map = headerMap_(ledger);
+  const map = headerMap_(ledger);
+  rows.forEach((r) => {
     ledger.getRange(r._row, map["領収書保存パス"], 1, 1).setValue(newPath);
     ledger.getRange(r._row, map["領収書保存カテゴリ"], 1, 1).setValue(CATEGORIES[newRepId]);
   });

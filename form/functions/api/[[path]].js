@@ -8,8 +8,12 @@
 // Pages にかける Cloudflare Access の保護対象に /api/* も含められる。
 // 独立した workers.dev の公開エンドポイントと CORS "*" は廃止した。
 // 必要な環境変数 (Pages プロジェクトの Settings → Environment variables):
-//   GAS_ENDPOINT  GAS Web App の /exec URL
-//   API_TOKEN     GAS の Script Properties の API_TOKEN と同じ値
+//   GAS_ENDPOINT       GAS Web App の /exec URL
+//   API_TOKEN          GAS の Script Properties の API_TOKEN と同じ値
+//   ACCESS_TEAM_DOMAIN (本番) Cloudflare Access のチームドメイン (例: yourteam.cloudflareaccess.com)
+//   ACCESS_AUD         (本番) Access アプリケーションの AUD タグ
+//   ADMIN_EMAILS       (本番・任意) 管理APIを許可するメールアドレス (カンマ区切り)
+// ACCESS_* を設定すると /api/admin/* は Access JWT の署名検証を必須にする。
 
 const MAX_RECEIPTS = 5;
 const MAX_USES = 10;
@@ -57,9 +61,14 @@ function validateFile(f) {
   return null;
 }
 
+function isValidClientRequestId(v) {
+  // 申請IDは台帳にそのまま書かれるため、安全な文字種だけに制限する (GAS側と同一ルール)
+  return typeof v === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(v);
+}
+
 function validatePayload(p) {
   if (!p || typeof p !== "object") return "payload is not an object";
-  if (!isNonEmptyString(p.clientRequestId)) return "clientRequestId is required";
+  if (!isValidClientRequestId(p.clientRequestId)) return "clientRequestId is invalid";
   if (p.kind === "income") {
     if (!isNonEmptyString(p.subjectId)) return "subjectId is required";
     if (!Number.isInteger(p.amount) || p.amount <= 0) return "amount must be a positive integer";
@@ -121,10 +130,86 @@ async function forwardToGas(env, payload) {
   return json(data, res.ok ? 200 : 502);
 }
 
+// ---- Cloudflare Access の JWT 検証 (管理APIの二重認可) ----
+// Access のパス別ポリシーだけに頼らず、Functions 側でも署名付き JWT を検証する。
+// これにより、ポリシーのパス照合をすり抜けるような経路や、保護対象外の
+// デプロイ URL から叩かれても、管理APIは安全側に倒れる。
+// 環境変数 ACCESS_TEAM_DOMAIN / ACCESS_AUD が未設定の間 (テスト期間) は検証を
+// 行わない。本番切替時は必ず設定すること (手順書参照)。
+
+function b64urlToBytes(s) {
+  const b64 = s.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(s.length / 4) * 4, "=");
+  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+}
+
+let jwksCache = { keys: null, fetchedAt: 0 };
+
+async function accessPublicKey(env, kid) {
+  if (!jwksCache.keys || Date.now() - jwksCache.fetchedAt > 10 * 60 * 1000) {
+    const res = await fetch(`https://${env.ACCESS_TEAM_DOMAIN}/cdn-cgi/access/certs`);
+    if (!res.ok) return null;
+    const jwks = await res.json();
+    jwksCache = { keys: jwks.keys || [], fetchedAt: Date.now() };
+  }
+  const jwk = jwksCache.keys.find((k) => k.kid === kid);
+  if (!jwk) return null;
+  return crypto.subtle.importKey(
+    "jwk",
+    { kty: jwk.kty, n: jwk.n, e: jwk.e },
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+    false,
+    ["verify"]
+  );
+}
+
+async function verifyAccessJwt(env, request) {
+  const token = request.headers.get("Cf-Access-Jwt-Assertion");
+  if (!token) return null;
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  let header, payload;
+  try {
+    header = JSON.parse(new TextDecoder().decode(b64urlToBytes(parts[0])));
+    payload = JSON.parse(new TextDecoder().decode(b64urlToBytes(parts[1])));
+  } catch {
+    return null;
+  }
+  const auds = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+  if (!auds.includes(env.ACCESS_AUD)) return null;
+  if (payload.iss !== `https://${env.ACCESS_TEAM_DOMAIN}`) return null;
+  if (!payload.exp || payload.exp * 1000 < Date.now()) return null;
+  const key = await accessPublicKey(env, header.kid);
+  if (!key) return null;
+  const ok = await crypto.subtle.verify(
+    { name: "RSASSA-PKCS1-v1_5" },
+    key,
+    b64urlToBytes(parts[2]),
+    new TextEncoder().encode(parts[0] + "." + parts[1])
+  );
+  return ok ? payload : null;
+}
+
+/** 管理APIの認可。許可なら { email }、拒否なら null を返す。 */
+async function adminActor(env, request) {
+  if (!env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD) return { email: "" };
+  const payload = await verifyAccessJwt(env, request);
+  if (!payload) return null;
+  const email = payload.email || "";
+  if (env.ADMIN_EMAILS) {
+    const allowed = env.ADMIN_EMAILS.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+    if (!allowed.includes(email.toLowerCase())) return null;
+  }
+  return { email };
+}
+
 export async function onRequest(context) {
   const { request, env } = context;
   const url = new URL(request.url);
-  url.pathname = url.pathname.replace(/\/{2,}/g, "/"); // "//api/submit" のような指定ミスを吸収する
+  // パスの正規化はしない。// を含むような不正なパスは、Access のパス照合を
+  // すり抜ける経路になり得るため、そのまま 404 で落とす。
+  if (url.pathname.includes("//")) {
+    return json({ ok: false, error: "not found" }, 404);
+  }
 
   if (url.pathname === "/api/health") {
     return json({ ok: true, gasConnected: Boolean(env.GAS_ENDPOINT) });
@@ -148,13 +233,17 @@ export async function onRequest(context) {
   // 提出の状態照会
   if (url.pathname === "/api/status" && request.method === "GET") {
     const clientRequestId = url.searchParams.get("clientRequestId");
-    if (!clientRequestId) return json({ ok: false, error: "clientRequestId is required" }, 400);
+    if (!isValidClientRequestId(clientRequestId)) return json({ ok: false, error: "clientRequestId is invalid" }, 400);
     if (!env.GAS_ENDPOINT) return json({ ok: true, mock: true, found: false });
     return forwardToGas(env, { action: "status", clientRequestId });
   }
 
-  // 管理用 (会計担当のみ。アクセス制御は Pages 側の Cloudflare Access で行う)
+  // 管理用 (会計担当のみ)。Cloudflare Access のパス別ポリシーに加えて、
+  // Functions 側でも Access JWT を検証する二重認可 (adminActor)。
+  // 操作者のメールは GAS へ渡し、APIログ に監査記録として残す。
   if (url.pathname.startsWith("/api/admin/") && request.method === "POST") {
+    const actor = await adminActor(env, request);
+    if (!actor) return json({ ok: false, error: "forbidden" }, 403);
     let body;
     try {
       body = await request.json();
@@ -167,16 +256,16 @@ export async function onRequest(context) {
       if (!Number.isInteger(fy) || fy < 2000 || fy > 2100) {
         return json({ ok: false, error: "fiscalYear is invalid" }, 400);
       }
-      return forwardToGas(env, { action: "recompute", fiscalYear: fy });
+      return forwardToGas(env, { action: "recompute", fiscalYear: fy, actorEmail: actor.email });
     }
     if (url.pathname === "/api/admin/void") {
       if (!isNonEmptyString(body.transactionId)) return json({ ok: false, error: "transactionId is required" }, 400);
       if (!isNonEmptyString(body.reason)) return json({ ok: false, error: "reason is required" }, 400);
-      return forwardToGas(env, { action: "void", transactionId: body.transactionId, reason: body.reason });
+      return forwardToGas(env, { action: "void", transactionId: body.transactionId, reason: body.reason, actorEmail: actor.email });
     }
     if (url.pathname === "/api/admin/toggle-settled") {
       if (!isNonEmptyString(body.transactionId)) return json({ ok: false, error: "transactionId is required" }, 400);
-      return forwardToGas(env, { action: "toggleSettled", transactionId: body.transactionId });
+      return forwardToGas(env, { action: "toggleSettled", transactionId: body.transactionId, actorEmail: actor.email });
     }
     return json({ ok: false, error: "not found" }, 404);
   }

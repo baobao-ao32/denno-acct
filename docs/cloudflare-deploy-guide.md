@@ -51,6 +51,8 @@ npx wrangler pages secret put GAS_ENDPOINT --project-name denno-acct  # Step 2 �
 | `API_BASE` | 常に `""`（同一オリジンの相対パス） | `form/config.js` の定数（書き換え不要） |
 | `GAS_ENDPOINT` | GAS Web アプリの URL（`https://script.google.com/macros/s/.../exec`） | Pages プロジェクトの環境変数（Secret） |
 | `API_TOKEN` | Step 2 で決めた共有トークン（両側で同じ値） | GAS のスクリプト プロパティと Pages の環境変数（Secret） |
+| `ACCESS_TEAM_DOMAIN` / `ACCESS_AUD` | Cloudflare Access のチームドメインとアプリケーション AUD（本番切替時に設定） | Pages の環境変数 |
+| `ADMIN_EMAILS` | 管理APIを許可するメールアドレス（カンマ区切り、任意） | Pages の環境変数 |
 
 `API_BASE` に GAS の URL を入れると、フォームがブラウザから GAS を直接叩くことになり、CORS で弾かれて「APIに接続できませんでした」になる（2026-11-25 に実際に起きた）。GAS の URL が入るのは `GAS_ENDPOINT` だけ。
 
@@ -86,6 +88,9 @@ npx wrangler pages deploy form --project-name denno-acct
 
 ## 本番切替の直前にやること
 
-- Cloudflare Access（Google ログイン）を Pages プロジェクトに有効化して、アクセスをサークル関係者に絞る（テスト期間は共有リンクのまま）。同一オリジン構成なので `/api/*` も自動で Access の対象になる。管理ページ（admin.html）はパス別ポリシーで会計・役員のみに絞る
+- Cloudflare Access（Google ログイン）を Pages プロジェクトに有効化して、アクセスをサークル関係者に絞る（テスト期間は共有リンクのまま）。同一オリジン構成なので `/api/*` も自動で Access の対象になる。設定の要点:
+  - 保護対象のホストには `denno-acct.pages.dev` だけでなく **`*.denno-acct.pages.dev` も含める**。Pages はデプロイごとに `<hash>.denno-acct.pages.dev` という URL を発行し、そちらは本番と同じ環境変数で動くため、対象に入れ忘れると無認証で迂回される
+  - 管理系はパス別ポリシーで会計・役員のみに絞る。対象パスは **`/admin*` と `/api/admin/*` の両方**（`admin.html` だけだと拡張子省略の `/admin` や API 直叩きが素通りする）
+  - Functions 側でも Access JWT を検証する二重認可を有効にする。Pages の環境変数に `ACCESS_TEAM_DOMAIN`（例: `yourteam.cloudflareaccess.com`）と `ACCESS_AUD`（Access アプリケーションの AUD タグ）を設定すると `/api/admin/*` が署名検証を必須にする。許可メールをさらに絞る場合は `ADMIN_EMAILS`（カンマ区切り）も設定する。操作者のメールは GAS の APIログ に監査記録として残る
 - 旧 Worker（denno-acct-api）はもう使わないので、Cloudflare 側で削除しておく（公開エンドポイントを残さないため）
 - テスト提出した行を台帳から void にして掃除する

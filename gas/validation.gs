@@ -21,10 +21,19 @@ function isValidDateString_(v) {
   return d.getFullYear() === parts[0] && d.getMonth() === parts[1] - 1 && d.getDate() === parts[2];
 }
 
+function isValidClientRequestId_(v) {
+  // 申請IDは台帳にそのまま書かれるため、数式インジェクション等の余地を
+  // 断つよう安全な文字種だけに制限する (フォームは crypto.randomUUID() を使用)
+  return typeof v === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(v);
+}
+
 function validatePayload_(p) {
   if (!p || typeof p !== "object") return "payload is not an object";
-  if (typeof p.clientRequestId !== "string" || !p.clientRequestId) return "clientRequestId is required";
+  // clientRequestId の必須チェックは提出系 (income/expense/status) の中でのみ行う。
+  // checkReceipt や管理系アクションは clientRequestId を持たないため、
+  // ここで一律に必須化するとそれらが全て失敗する。
   if (p.kind === "income") {
+    if (!isValidClientRequestId_(p.clientRequestId)) return "clientRequestId is invalid";
     if (!INCOME_SUBJECTS[p.subjectId]) return "unknown income subjectId";
     if (!Number.isInteger(p.amount) || p.amount <= 0) return "amount must be a positive integer";
     if (p.subjectId === "other_income" && !(typeof p.detail === "string" && p.detail.trim())) {
@@ -33,6 +42,7 @@ function validatePayload_(p) {
     return null;
   }
   if (p.kind === "expense") {
+    if (!isValidClientRequestId_(p.clientRequestId)) return "clientRequestId is invalid";
     if (!Array.isArray(p.receipts) || p.receipts.length === 0) return "receipts is required";
     if (p.receipts.length > MAX_RECEIPTS) return "too many receipts";
     for (const r of p.receipts) {
@@ -87,7 +97,7 @@ function validatePayload_(p) {
     return null;
   }
   if (p.action === "status") {
-    if (!p.clientRequestId) return "clientRequestId is required";
+    if (!isValidClientRequestId_(p.clientRequestId)) return "clientRequestId is invalid";
     return null;
   }
   if (p.action === "recompute") {

@@ -32,6 +32,15 @@ function sanitizeCellText_(v) {
   return /^[=+\-@\t\r\n]/.test(v) ? "'" + v : v;
 }
 
+/**
+ * フラグ列の真偽判定を generate.py の _truthy と揃える。
+ * JS では文字列 "FALSE" も真になってしまうため、手編集されたシートで
+ * GAS と生成器の解釈が食い違わないよう、真は boolean true と "TRUE" のみとする。
+ */
+function isTruthy_(v) {
+  return v === true || (typeof v === "string" && v.trim().toUpperCase() === "TRUE");
+}
+
 function appendRowsByHeader_(sheet, rows) {
   const map = headerMap_(sheet);
   const width = sheet.getLastColumn();

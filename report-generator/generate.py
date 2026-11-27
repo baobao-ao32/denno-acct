@@ -38,7 +38,7 @@ import sys
 import types
 from collections import OrderedDict
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 from openpyxl import load_workbook
 from pptx import Presentation
 from pptx.enum.text import PP_ALIGN
@@ -163,10 +163,15 @@ def generate_xlsx(data, agg):
     for i, (subject_id, row) in enumerate(agg["income"].items()):
         r = 14 + i
         prev = data.PREV_YEAR_INCOME.get(subject_id, None)
-        delta = "-" if prev in (None, 0) else row["amount"] - prev
+        # 前年度実績が 0円だった場合も増減は金額そのものになる (GASの収入タブと同じ)。
+        # "-" は前年度データ自体が無いときだけ。
+        delta = "-" if prev is None else row["amount"] - prev
         ws.cell(row=r, column=3, value=row["subject"])
         ws.cell(row=r, column=6, value=row["amount"])
         ws.cell(row=r, column=9, value=delta)
+        remark = getattr(data, "INCOME_REMARKS", {}).get(subject_id)
+        if remark:
+            ws.cell(row=r, column=12, value=remark)
 
     # 支出の部: rows 24-38, 大分類(C) / 科目(E) / 金額(H) / 備考(K)
     ordered = sorted(agg["expenses"].items(),
@@ -181,6 +186,10 @@ def generate_xlsx(data, agg):
             last_cat = cat_id
         ws.cell(row=r, column=5, value=expense_subject_name(subject, subject))
         ws.cell(row=r, column=8, value=row["amount"])
+        remark = getattr(data, "EXPENSE_REMARKS", {}).get(
+            (CATEGORY_REPORT_NAME[cat_id], expense_subject_name(subject, subject)))
+        if remark:
+            ws.cell(row=r, column=11, value=remark)
 
     # サマリ: H6 収入合計はテンプレに数式が無いベタ値のため値を書き込む
     ws["H6"] = agg["income_total"]
@@ -487,6 +496,27 @@ def _convert_pdf(pdf_path, work_dir, stem):
     return sorted(glob.glob(prefix + "-*.png"), key=page_no)
 
 
+def _normalized_image(path, work_dir, stem):
+    """EXIF Orientation を実ピクセルへ反映したコピーを work_dir に作って返す。
+
+    スマホ写真は「横長ピクセル + 回転タグ」で縦長を表すことが多い。そのまま
+    だとレイアウトの縦横判定を誤り、PowerPoint 上でも横倒しになるため、
+    回転タグがある画像だけ転置済みコピー (PNG) を使う。タグが無い/通常向き
+    の画像は元のパスをそのまま返す。
+    """
+    try:
+        with Image.open(path) as im:
+            orientation = im.getexif().get(274)
+            if orientation in (None, 1):
+                return path
+            transposed = ImageOps.exif_transpose(im)
+            out = os.path.join(work_dir, f"exif-{stem}.png")
+            transposed.save(out)
+            return out
+    except Exception:
+        return path
+
+
 def load_fiscal_folder(folder):
     """Load an extracted fiscal-year folder:
         <folder>/<FY>年度会計記録.xlsx   (Sheets export inside the Drive zip)
@@ -567,6 +597,8 @@ def load_fiscal_folder(folder):
     transactions = []
     for txid, tx in txs.items():
         total = sum(line["amount"] for line in tx["lines"])
+        if not tx["proof"] and not tx["receipt_total"]:
+            errors.append(f"{txid}: 領収書全体の金額が記録されていません")
         if tx["receipt_total"] and total != tx["receipt_total"]:
             errors.append(
                 f"{txid}: 用途合計 {total:,}円 が領収書全体の金額 "
@@ -607,7 +639,7 @@ def load_fiscal_folder(folder):
                 except Exception as e:
                     errors.append(f"{txid}: PDF変換に失敗しました ({e}): {tx['saved_path']}")
             else:
-                image_paths = [local]
+                image_paths = [_normalized_image(local, work_dir, txid)]
         transactions.append({"date": tx["date"], "counterparty": tx["counterparty"],
                              "lines": tx["lines"], "receipt": True,
                              "image_paths": image_paths})
@@ -630,6 +662,7 @@ def load_fiscal_folder(folder):
     # --- prev-year income deltas from the 収入 tab (computed by GAS)
     prev_income = {}
     income_tab = {}
+    income_remarks = {}
     if "収入" in wb.sheetnames:
         for row in _sheet_dicts(wb["収入"]):
             name = row.get("科目")
@@ -640,12 +673,17 @@ def load_fiscal_folder(folder):
             sid = INCOME_SUBJECT_IDS.get(name)
             if sid and isinstance(delta, (int, float)):
                 prev_income[sid] = _num(row.get("金額")) - int(delta)
+            # GAS の集計タブに書かれた備考は報告書へ転記する
+            if sid and row.get("備考"):
+                income_remarks[sid] = row["備考"]
 
     data = types.SimpleNamespace(
         FISCAL_YEAR=fy,
         ORG_NAME=settings.get("団体名") or "電脳サークル",
         INCOME=income,
         PREV_YEAR_INCOME=prev_income,
+        INCOME_REMARKS=income_remarks,
+        EXPENSE_REMARKS={},
         TRANSACTIONS=transactions,
         REPORT_META={
             "accountant": settings.get("会計氏名") or "",
@@ -689,6 +727,9 @@ def load_fiscal_folder(folder):
             subject = row.get("科目")
             if subject and subject != "支出合計":
                 tab_groups[(last_cat, subject)] = _num(row.get("金額"))
+                # GAS の集計タブに書かれた備考は報告書へ転記する
+                if row.get("備考"):
+                    data.EXPENSE_REMARKS[(last_cat, subject)] = row["備考"]
         mine_groups = {(CATEGORY_REPORT_NAME[cid], expense_subject_name(subject, subject)): row["amount"]
                        for (cid, subject), row in agg["expenses"].items()}
         for key in set(tab_groups) | set(mine_groups):

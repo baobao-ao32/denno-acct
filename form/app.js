@@ -280,7 +280,16 @@ async function checkDuplicateReceipt(entry) {
       body: JSON.stringify({ sha256: entry.hash }),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok || !data.exists) return;
+    if (!res.ok) {
+      // 照会に失敗したまま静かに新規送信へ進むと、二重登録の検知が効かない。
+      // 送信自体は止めないが、チェックできていないことを明示する。
+      const notice = $(".dup-notice", entry.card);
+      notice.hidden = false;
+      notice.textContent =
+        "登録状況の照会に失敗しました。この領収書が登録済みかどうか確認できていません（送信は可能ですが、重複にご注意ください）。";
+      return;
+    }
+    if (!data.exists) return;
     entry.appendToTransactionId = data.transactionId;
     entry.duplicate = data;
     entry.card.dataset.registeredAmount = String(data.registeredAmount || 0);
@@ -316,7 +325,11 @@ async function checkDuplicateReceipt(entry) {
     }
     refreshCard(entry.card);
   } catch {
-    // ローカルプレビュー等、APIが無い環境では照会を黙ってスキップする
+    // 通信自体が失敗した場合も、照会できていないことを知らせる
+    const notice = $(".dup-notice", entry.card);
+    notice.hidden = false;
+    notice.textContent =
+      "登録状況の照会に失敗しました。この領収書が登録済みかどうか確認できていません（送信は可能ですが、重複にご注意ください）。";
   }
 }
 
@@ -354,11 +367,13 @@ function validateReceiptCard(card, label, requireExact) {
   if (!$(".r-payment", card).value) errors.push(`${label}: 支払方法が未選択です`);
   const total = Number($(".r-total", card).value || 0);
   if (total <= 0) errors.push(`${label}: 金額が未入力です`);
+  else if (!Number.isInteger(total)) errors.push(`${label}: 金額は整数で入力してください`);
   const uses = collectUses(card);
   if (uses.length === 0) errors.push(`${label}: 用途がありません`);
   uses.forEach((u, i) => {
     if (!u.name) errors.push(`${label}: 用途${i + 1}の用途名が未入力です`);
     if (u.amount <= 0) errors.push(`${label}: 用途${i + 1}の金額が未入力です`);
+    else if (!Number.isInteger(u.amount)) errors.push(`${label}: 用途${i + 1}の金額は整数で入力してください`);
     if (!u.categoryId) errors.push(`${label}: 用途${i + 1}のカテゴリが未選択です`);
     if (!u.subjectId) errors.push(`${label}: 用途${i + 1}の報告科目が未選択です`);
     if (!u.itemName) errors.push(`${label}: 用途${i + 1}の品目名が未入力です`);
@@ -541,7 +556,7 @@ $("#income-detail").addEventListener("input", validateIncome);
 function validateIncome() {
   const subject = INCOME_SUBJECTS.find((s) => s.id === incomeSubjectSel.value);
   const amount = Number($("#income-amount").value || 0);
-  let ok = !!subject && amount > 0;
+  let ok = !!subject && amount > 0 && Number.isInteger(amount);
   if (ok && subject.requiresDetail) ok = $("#income-detail").value.trim().length > 0;
   $("#submit-income").disabled = !ok;
   return ok;

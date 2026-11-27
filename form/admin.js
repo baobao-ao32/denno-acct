@@ -35,7 +35,7 @@ $("#do-recompute").addEventListener("click", async (ev) => {
   }
   try {
     await callAdmin("/api/admin/recompute", { fiscalYear: fy }, ev.currentTarget);
-    showMessage(`${fy}年度の集計を再計算しました。`, "ok");
+    showMessage(`${fy}年度の集計を再計算しました。`, "success");
   } catch (e) {
     showMessage("再計算に失敗しました: " + e.message, "error");
   }
@@ -55,7 +55,7 @@ $("#do-void").addEventListener("click", async (ev) => {
   if (!confirm(`取引 ${transactionId} を取り消します。よろしいですか？`)) return;
   try {
     const data = await callAdmin("/api/admin/void", { transactionId, reason }, ev.currentTarget);
-    showMessage(`取引 ${transactionId} を取り消しました（${data.voided} 行）。`, "ok");
+    showMessage(`取引 ${transactionId} を取り消しました（${data.voided} 行）。`, "success");
   } catch (e) {
     showMessage("取消に失敗しました: " + e.message, "error");
   }
@@ -69,7 +69,7 @@ $("#do-toggle").addEventListener("click", async (ev) => {
   }
   try {
     const data = await callAdmin("/api/admin/toggle-settled", { transactionId }, ev.currentTarget);
-    showMessage(`取引 ${transactionId} の精算状態を「${data.settled}」にしました。`, "ok");
+    showMessage(`取引 ${transactionId} の精算状態を「${data.settled}」にしました。`, "success");
   } catch (e) {
     showMessage("精算状態の変更に失敗しました: " + e.message, "error");
   }

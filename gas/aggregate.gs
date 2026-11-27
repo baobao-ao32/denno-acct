@@ -74,7 +74,7 @@ function readExpenseRemarks_(sheet) {
  */
 function recompute_(ss, fy, props) {
   const ledger = ss.getSheetByName("取引明細");
-  const rows = readAllRows_(ledger).filter((r) => !r["取消フラグ"]);
+  const rows = readAllRows_(ledger).filter((r) => !isTruthy_(r["取消フラグ"]));
   const incomeRemarks = readIncomeRemarks_(ss.getSheetByName("収入"));
   const expenseRemarks = readExpenseRemarks_(ss.getSheetByName("支出"));
 
@@ -92,7 +92,7 @@ function recompute_(ss, fy, props) {
     } else if (r["種別"] === "expense") {
       const amount = Number(r["用途別金額合計"] || 0);
       expenseTotal += amount;
-      if (r["証明不可フラグ"]) unprovable += amount;
+      if (isTruthy_(r["証明不可フラグ"])) unprovable += amount;
       const key = r["用途別カテゴリID"] + "|" + r["報告科目ID"];
       expenseByGroup[key] = (expenseByGroup[key] || 0) + amount;
     }

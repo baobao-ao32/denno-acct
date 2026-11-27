@@ -31,7 +31,10 @@
  */
 
 function registerIncome_(p, props) {
-  const fy = fiscalYearOf_(p.submittedAt || new Date());
+  // 収入の年度帰属は報告日。クライアント申告の submittedAt は端末時計のズレや
+  // 改ざんで NaN年度 等を生むため使わず、サーバー側の現在時刻で統一する。
+  const now = new Date();
+  const fy = fiscalYearOf_(now);
   const env = ensureFiscalEnv_(fy, props);
   const ss = env.ss;
 
@@ -42,7 +45,6 @@ function registerIncome_(p, props) {
   }
 
   const transactionId = "TX-" + Utilities.getUuid();
-  const now = new Date();
   const detail = p.subjectId === "other_income" ? p.detail : "";
   const row = {
     "取引ID": transactionId,
@@ -50,8 +52,7 @@ function registerIncome_(p, props) {
     "種別": "income",
     "申請ID": p.clientRequestId,
     "購入日": "",
-    // ISO文字列 (UTC) のまま書くと記録実行時刻 (JST表示) と9時間ズレて見えるため Date に直す
-    "報告年月日時間": p.submittedAt ? new Date(p.submittedAt) : now,
+    "報告年月日時間": now,
     "記録実行時刻": now,
     "購入者氏名": "",
     "購入先": "",
