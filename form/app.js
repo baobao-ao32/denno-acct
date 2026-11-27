@@ -41,7 +41,8 @@ function loadHeicLib() {
   if (!heicLibPromise) {
     heicLibPromise = new Promise((resolve, reject) => {
       const s = document.createElement("script");
-      s.src = "https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js";
+      // 同梱版を使う (CDN には依存しない)。ライセンス表示は vendor/THIRD-PARTY-NOTICES.md
+      s.src = "vendor/heic2any.min.js";
       s.onload = () => resolve(window.heic2any);
       s.onerror = () => reject(new Error("HEIC変換ライブラリの読み込みに失敗しました"));
       document.head.appendChild(s);

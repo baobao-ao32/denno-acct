@@ -1,13 +1,13 @@
 # Third-party notices — form/vendor/
 
-## heic2any.min.js (予定: このフォルダに配置する)
+## heic2any.min.js
 
 HEIC/HEIF 画像のブラウザ側 JPEG 変換に使う。npm パッケージ heic2any 0.0.4 の
-`dist/heic2any.min.js` を無改変で同梱する。
+`dist/heic2any.min.js` を無改変で同梱している。
 
 真正なファイルの SHA-256 (npm 配布物の値):
 `0963cfa50e9e1e7e6af929a40a81e3e898a673f1270eafa6917dd137e4968164`
-配置前に `shasum -a 256 heic2any.min.js` で一致を確認すること。
+2026-11-27 に配置し、同梱ファイルの SHA-256 がこの値と一致することを確認済み。
 
 このファイルは複数のライセンスのコンポーネントを含む:
 
